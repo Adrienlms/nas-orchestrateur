@@ -6,12 +6,13 @@ services:
     # build: .                      # pour construire l'image localement à la place
     container_name: super-agent
     restart: unless-stopped
-    user: "568:568"                 # utilisateur « apps » de TrueNAS
     ports:
       - "8090:8080"                 # interface sur http://IP-DU-NAS:8090
     environment:
       SUPER_AGENT_PASSWORD: "change-moi"
       TZ: "Europe/Paris"
+      PUID: "568"                   # propriétaire des données (« apps » sur TrueNAS)
+      PGID: "568"
       # Abonnement Claude Pro/Max : jeton obtenu avec « claude setup-token »
       CLAUDE_CODE_OAUTH_TOKEN: ""
       # Fournisseurs avec niveau gratuit

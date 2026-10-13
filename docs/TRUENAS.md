@@ -6,8 +6,11 @@ les applications avec Docker.
 ## 1. Préparer un dossier pour les données
 
 Dans **Datasets**, crée un dataset, par exemple `tank/apps/super-agent`
-(remplace `tank` par le nom de ton pool). Dans ses permissions, donne-le à
-l'utilisateur et au groupe **apps** (identifiant 568).
+(remplace `tank` par le nom de ton pool : c'est le nom affiché en haut de la
+page **Datasets**). Son chemin est alors `/mnt/tank/apps/super-agent`.
+
+Pas besoin de régler ses permissions : au démarrage, le conteneur donne le
+dossier à l'utilisateur **apps** (568) puis abandonne les droits root.
 
 Ce dossier contiendra la configuration, l'historique des tâches et les projets
 générés. Il survit aux mises à jour de l'application.
@@ -38,6 +41,14 @@ Mets au moins une des valeurs suivantes, selon ce que tu as :
 
 Ouvre ensuite `http://IP-DU-NAS:8090`. Le navigateur demande un identifiant :
 mets ce que tu veux comme nom, et ton mot de passe.
+
+Si l'app reste en « Crashed » ou « Stopped », ouvre-la puis **Logs** : le
+message indique la cause. Les plus fréquentes :
+
+- `Permission denied` ou `n'est pas accessible en écriture` : retire la ligne
+  `user:` du YAML si tu l'as gardée, et vérifie que le chemin du volume pointe
+  bien vers ton dataset (le bon nom de pool) ;
+- `port is already allocated` : change `8090` pour un port libre.
 
 L'onglet **Fournisseurs** montre qui est prêt. Une tâche qui échoue avec
 « Claude Code n'est pas connecté » veut dire que le jeton est absent ou
