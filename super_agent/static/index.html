@@ -36,7 +36,7 @@ main { padding: 24px; max-width: 1280px; margin: 0 auto; }
 .panel + .panel { margin-top: 20px; }
 h2 { font-size: 15px; margin: 0 0 12px; }
 label { display: block; font-size: 13px; color: var(--muted); margin: 12px 0 4px; }
-textarea, select, input[type=number] { width: 100%; font: inherit; color: var(--text);
+textarea, select, input[type=number], input[type=text] { width: 100%; font: inherit; color: var(--text);
   background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
 textarea { resize: vertical; }
 .row { display: flex; gap: 10px; }
@@ -84,6 +84,10 @@ th { color: var(--muted); font-weight: 600; font-size: 13px; }
 .err { color: var(--bad); margin-top: 10px; font-size: 14px; }
 .ok-msg { color: var(--ok); margin-left: 10px; font-size: 14px; }
 .hidden { display: none !important; }
+.seg { display: flex; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 3px; gap: 3px; }
+.seg button { flex: 1; border: 0; background: none; padding: 6px; border-radius: 6px; font: inherit; font-size: 14px; color: var(--muted); cursor: pointer; }
+.seg button.active { background: var(--panel); color: var(--text); font-weight: 600; box-shadow: 0 1px 2px rgba(0,0,0,.08); }
+a.pr { color: var(--accent); font-weight: 600; }
 </style>
 </head>
 <body>
@@ -103,6 +107,20 @@ th { color: var(--muted); font-weight: 600; font-size: 13px; }
     <div>
       <form class="panel" id="new-job">
         <h2>Nouvelle demande</h2>
+        <div class="seg" role="tablist">
+          <button type="button" data-mode="new" class="active">Nouveau projet</button>
+          <button type="button" data-mode="repo">Dépôt GitHub</button>
+        </div>
+        <div id="repo-fields" class="hidden">
+          <label for="repo-url">Adresse du dépôt</label>
+          <input type="text" id="repo-url" placeholder="https://github.com/toi/ton-depot">
+          <div class="row">
+            <div><label for="base-branch">Branche</label><input type="text" id="base-branch" value="main"></div>
+            <div><label for="test-cmd">Commande de test</label><input type="text" id="test-cmd" placeholder="automatique"></div>
+          </div>
+          <p class="muted" id="repo-hint" style="font-size:13px;margin:8px 0 0">Les modifications arrivent dans une pull request : rien n'est fusionné sans toi.</p>
+        </div>
+        <label for="request" id="request-label">Ta demande</label>
         <textarea id="request" rows="5" placeholder="Ex. : un outil en ligne de commande qui convertit un CSV en JSON" required></textarea>
         <div class="row">
           <div>
@@ -251,10 +269,11 @@ async function loadDetail() {
   $("#detail").innerHTML = `
     <div class="head">
       <div><h2>${esc(job.request)}</h2><div class="muted" style="font-size:13px">${ago(job.created)}
-        · ${job.options.strategy === "economy" ? "économique" : "meilleurs modèles"} · ${job.options.rounds} tours max</div></div>
+        · ${job.options.repo_url ? esc(job.options.repo_url.replace("https://github.com/", "")) + " · " : ""}${job.options.strategy === "economy" ? "économique" : "meilleurs modèles"} · ${job.options.rounds} tours max</div></div>
       <div class="actions">${badge(job)}</div>
     </div>
     ${job.error ? `<div class="err">${esc(job.error)}</div>` : ""}
+    ${job.pr_url ? `<p>Pull request : <a class="pr" href="${esc(job.pr_url)}" target="_blank" rel="noopener">${esc(job.pr_url.replace("https://github.com/", ""))}</a>${job.approved ? "" : " <span class=\"muted\">(brouillon : non approuvée par le relecteur)</span>"}</p>` : ""}
     ${steps ? `<ul class="steps">${steps}</ul>` : ""}
     <div class="tabs">${tab("log", "Journal")}${tab("report", "Rapport", !!job.report)}${tab("files", `Fichiers (${job.files.length})`, job.files.length > 0)}</div>
     ${body}
@@ -278,6 +297,21 @@ async function loadDetail() {
   if (live) timer = setTimeout(() => { loadDetail(); loadJobs(); }, 2000);
 }
 
+let mode = "new";
+try { mode = localStorage.getItem("sa-mode") || "new"; } catch {}
+function setMode(m) {
+  mode = m;
+  try { localStorage.setItem("sa-mode", m); } catch {}
+  document.querySelectorAll(".seg button").forEach(b => b.classList.toggle("active", b.dataset.mode === m));
+  $("#repo-fields").classList.toggle("hidden", m !== "repo");
+  $("#request").placeholder = m === "repo"
+    ? "Ex. : ajoute un bouton pour annuler une tâche en cours"
+    : "Ex. : un outil en ligne de commande qui convertit un CSV en JSON";
+}
+document.querySelectorAll(".seg button").forEach(b => b.onclick = () => setMode(b.dataset.mode));
+setMode(mode);
+try { $("#repo-url").value = localStorage.getItem("sa-repo") || ""; } catch {}
+
 $("#new-job").onsubmit = async (e) => {
   e.preventDefault();
   $("#form-err").textContent = "";
@@ -285,7 +319,10 @@ $("#new-job").onsubmit = async (e) => {
   try {
     const job = await api("/api/jobs", { method: "POST", body: JSON.stringify({
       request: $("#request").value, strategy: $("#strategy").value,
-      rounds: +$("#rounds").value, run_tests: $("#run-tests").checked }) });
+      rounds: +$("#rounds").value, run_tests: $("#run-tests").checked,
+      ...(mode === "repo" ? { repo_url: $("#repo-url").value, base_branch: $("#base-branch").value,
+                              test_command: $("#test-cmd").value } : {}) }) });
+    if (mode === "repo") try { localStorage.setItem("sa-repo", $("#repo-url").value); } catch {}
     $("#request").value = "";
     select(job.id);
   } catch (err) { $("#form-err").textContent = err.message; }
@@ -295,6 +332,9 @@ $("#new-job").onsubmit = async (e) => {
 // ---- fournisseurs ------------------------------------------------------
 async function loadStatus() {
   const s = await api("/api/status");
+  $("#repo-hint").textContent = s.github
+    ? "Les modifications arrivent dans une pull request : rien n'est fusionné sans toi."
+    : "Ajoute la variable GITHUB_TOKEN au conteneur pour utiliser ce mode.";
   const ready = s.providers.filter(p => p.state === "ready").length;
   $("#quota").textContent = `${ready} fournisseur${ready > 1 ? "s" : ""} prêt${ready > 1 ? "s" : ""}`;
   $("#providers").innerHTML = s.providers.map(p => {

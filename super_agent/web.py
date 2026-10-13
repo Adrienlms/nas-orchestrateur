@@ -29,10 +29,18 @@ from urllib.parse import parse_qs, urlparse
 
 from .config import DEFAULT_CONFIG, build_router, load_config
 from .orchestrator import Orchestrator
+from .repo import GitRepo, parse_github_url
 from .router import status_report
 from .workspace import Workspace
 
 STATIC = Path(__file__).resolve().parent / "static"
+
+
+def write_json(path: Path, data: dict):
+    """Écriture atomique : un lecteur ne voit jamais un fichier à moitié écrit."""
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2))
+    os.replace(tmp, path)
 
 
 class JobStore:
@@ -46,6 +54,7 @@ class JobStore:
         if not self.config_path.exists():
             shutil.copy(DEFAULT_CONFIG, self.config_path)
         self.lock = threading.Lock()
+        self.github_api = os.environ.get("SUPER_AGENT_GITHUB_API", "https://api.github.com")
         self.queue: queue.Queue[str] = queue.Queue()
         for job in self.list():                       # tâches coupées par un redémarrage
             if job["status"] in ("queued", "running"):
@@ -77,7 +86,7 @@ class JobStore:
         with self.lock:
             job = self.get(job_id)
             job.update(fields)
-            (self.dir(job_id) / "job.json").write_text(json.dumps(job, ensure_ascii=False, indent=2))
+            write_json(self.dir(job_id) / "job.json", job)
             return job
 
     def create(self, request: str, options: dict) -> dict:
@@ -86,8 +95,8 @@ class JobStore:
         (path / "workspace").mkdir(parents=True)
         job = {"id": job_id, "request": request, "options": options, "status": "queued",
                "created": time.time(), "started": None, "finished": None,
-               "approved": None, "error": None, "steps": []}
-        (path / "job.json").write_text(json.dumps(job, ensure_ascii=False, indent=2))
+               "approved": None, "error": None, "steps": [], "changed": [], "pr_url": None}
+        write_json(path / "job.json", job)
         (path / "log.txt").write_text("")
         self.queue.put(job_id)
         return job
@@ -120,14 +129,41 @@ class JobStore:
                 config.setdefault("settings", {})["strategy"] = opts["strategy"]
             router = build_router(config, log, state_dir=self.data)
             rounds = int(opts.get("rounds") or config.get("settings", {}).get("max_review_rounds", 3))
-            orch = Orchestrator(router, Workspace(self.dir(job_id) / "workspace"), rounds,
-                                run_tests=opts.get("run_tests", True), log=log)
-            report = orch.run(job["request"])
-            self.update(job_id, status="done", approved=report.approved, steps=report.steps,
-                        finished=time.time())
+            if opts.get("repo_url"):
+                self._run_repo(job, router, rounds, log)
+            else:
+                orch = Orchestrator(router, Workspace(self.dir(job_id) / "workspace"), rounds,
+                                    run_tests=opts.get("run_tests", True), log=log)
+                report = orch.run(job["request"])
+                self.update(job_id, status="done", approved=report.approved, steps=report.steps,
+                            finished=time.time())
         except Exception as e:                          # noqa: BLE001 — on garde la trace pour l'utilisateur
             log("ERREUR : " + "".join(traceback.format_exception_only(e)).strip())
             self.update(job_id, status="failed", error=str(e), finished=time.time())
+
+    def _run_repo(self, job: dict, router, rounds: int, log):
+        """Mode dépôt : clone, modifications par l'équipe, puis branche + pull request."""
+        opts, job_dir = job["options"], self.dir(job["id"])
+        repo = GitRepo(opts["repo_url"], job_dir / "repo", log=log, api_base=self.github_api)
+        repo.clone(opts.get("base_branch") or "main")
+        ws = Workspace(repo.path, test_command=opts.get("test_command") or None)
+        orch = Orchestrator(router, ws, rounds, run_tests=opts.get("run_tests", True), log=log,
+                            repo_context=repo.context(), diff=repo.diff, artifacts_dir=job_dir)
+        report = orch.run(job["request"])
+        changed = sorted(report.files) + [f"{p} (supprimé)" for p in report.deleted]
+        self.update(job["id"], steps=report.steps, approved=report.approved, changed=changed)
+
+        branch = f"super-agent/{job['id']}"
+        title = job["request"].strip().splitlines()[0][:72]
+        if not repo.commit_and_push(branch, f"{title}\n\nProposé par Super Agent (tâche {job['id']})."):
+            log("Aucune modification à proposer.")
+        else:
+            body = ("Proposé par Super Agent. Rien n'est fusionné sans ton accord.\n\n"
+                    + (job_dir / "REPORT.md").read_text())
+            url = repo.open_pull_request(branch, title, body[:60_000], draft=not report.approved)
+            log(f"Pull request ouverte : {url}")
+            self.update(job["id"], pr_url=url)
+        self.update(job["id"], status="done", finished=time.time())
 
 
 def make_handler(store: JobStore, password: str):
@@ -207,7 +243,7 @@ def make_handler(store: JobStore, password: str):
         def status(self, query):
             router = build_router(load_config(store.config_path), lambda _: None, store.data)
             self._json({**status_report(router), "now": time.time(),
-                        "auth": bool(password)})
+                        "auth": bool(password), "github": bool(os.environ.get("GITHUB_TOKEN"))})
 
         def reset(self, query):
             build_router(load_config(store.config_path), lambda _: None, store.data).state.clear()
@@ -224,31 +260,47 @@ def make_handler(store: JobStore, password: str):
             options = {"strategy": body.get("strategy") if body.get("strategy") in ("best", "economy") else None,
                        "rounds": max(1, min(10, int(body.get("rounds") or 3))),
                        "run_tests": bool(body.get("run_tests", True))}
+            repo_url = str(body.get("repo_url") or "").strip()
+            if repo_url:
+                parse_github_url(repo_url)              # refuse une adresse invalide
+                if not os.environ.get("GITHUB_TOKEN"):
+                    raise ValueError("GITHUB_TOKEN n'est pas défini dans le conteneur")
+                branch = str(body.get("base_branch") or "main").strip()
+                if not re.fullmatch(r"[\w./-]+", branch):
+                    raise ValueError("nom de branche invalide")
+                options.update(repo_url=repo_url, base_branch=branch,
+                               test_command=str(body.get("test_command") or "").strip())
             self._json(store.create(request, options), 201)
 
         def job(self, job_id, query):
             job = store.get(job_id)
             d = store.dir(job_id)
-            ws = d / "workspace"
-            files = sorted(str(p.relative_to(ws)) for p in ws.rglob("*")
-                           if p.is_file() and "__pycache__" not in p.parts)
-            report = ws / "REPORT.md"
+            if job["options"].get("repo_url"):
+                files = [f for f in job.get("changed", []) if not f.endswith("(supprimé)")]
+                report = d / "REPORT.md"
+            else:
+                ws = d / "workspace"
+                files = sorted(str(p.relative_to(ws)) for p in ws.rglob("*")
+                               if p.is_file() and "__pycache__" not in p.parts)
+                report = ws / "REPORT.md"
             self._json({**job, "log": (d / "log.txt").read_text()[-50_000:], "files": files,
                         "report": report.read_text() if report.exists() else None})
 
         def job_file(self, job_id, query):
-            ws = (store.dir(job_id) / "workspace").resolve()
+            job = store.get(job_id)
+            ws = (store.dir(job_id) / ("repo" if job["options"].get("repo_url") else "workspace")).resolve()
             target = (ws / query.get("path", [""])[0]).resolve()
             if not target.is_relative_to(ws) or not target.is_file():
                 raise KeyError(job_id)
             self._send(200, target.read_bytes(), "text/plain; charset=utf-8")
 
         def job_zip(self, job_id, query):
-            ws = store.dir(job_id) / "workspace"
+            job = store.get(job_id)
+            ws = store.dir(job_id) / ("repo" if job["options"].get("repo_url") else "workspace")
             buf = io.BytesIO()
             with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
                 for p in ws.rglob("*"):
-                    if p.is_file() and "__pycache__" not in p.parts:
+                    if p.is_file() and not {"__pycache__", ".git"} & set(p.parts):
                         z.write(p, p.relative_to(ws))
             self._send(200, buf.getvalue(), "application/zip",
                        {"content-disposition": f'attachment; filename="super-agent-{job_id}.zip"'})

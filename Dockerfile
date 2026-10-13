@@ -2,14 +2,16 @@ FROM python:3.13-slim
 
 # Node.js + Claude Code : permet d'utiliser le quota de ton abonnement Claude.
 # Construis avec --build-arg INSTALL_CLAUDE_CODE=false pour une image plus légère.
+# git sert au mode « dépôt GitHub ».
 ARG INSTALL_CLAUDE_CODE=true
-RUN if [ "$INSTALL_CLAUDE_CODE" = "true" ]; then \
-      apt-get update && apt-get install -y --no-install-recommends nodejs npm ca-certificates \
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
+    && if [ "$INSTALL_CLAUDE_CODE" = "true" ]; then \
+      apt-get install -y --no-install-recommends nodejs npm \
       && npm install -g @anthropic-ai/claude-code \
       && npm cache clean --force \
-      && apt-get purge -y npm && apt-get autoremove -y \
-      && rm -rf /var/lib/apt/lists/*; \
-    fi
+      && apt-get purge -y npm && apt-get autoremove -y; \
+    fi \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 COPY super_agent ./super_agent

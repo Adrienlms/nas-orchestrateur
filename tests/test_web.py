@@ -9,6 +9,7 @@ import urllib.error
 import urllib.request
 from http.server import ThreadingHTTPServer
 from pathlib import Path
+from unittest import mock
 
 from super_agent.web import JobStore, make_handler
 
@@ -76,6 +77,14 @@ class TestWeb(unittest.TestCase):
         self.assertIn(b"ValueError", self.call(f"/api/jobs/{job['id']}/file?path=calc.py"))
         with self.assertRaises(urllib.error.HTTPError):
             self.call(f"/api/jobs/{job['id']}/file?path=../job.json")
+
+    @mock.patch.dict(os.environ, {"GITHUB_TOKEN": ""})
+    def test_repo_mode_validation(self):
+        for body in ({"request": "x", "repo_url": "pas-une-url"},
+                     {"request": "x", "repo_url": "https://github.com/a/b"}):   # sans GITHUB_TOKEN
+            with self.assertRaises(urllib.error.HTTPError) as ctx:
+                self.call("/api/jobs", "POST", body)
+            self.assertEqual(ctx.exception.code, 400)
 
     def test_invalid_config_is_refused(self):
         with self.assertRaises(urllib.error.HTTPError) as ctx:
