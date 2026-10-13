@@ -14,6 +14,8 @@ services:
       TZ: "Europe/Paris"
       # Abonnement Claude Pro/Max : jeton obtenu avec « claude setup-token »
       CLAUDE_CODE_OAUTH_TOKEN: ""
+      # Mode « dépôt GitHub » : jeton à accès limité (voir docs/TRUENAS.md)
+      GITHUB_TOKEN: ""
       # Fournisseurs avec niveau gratuit
       GEMINI_API_KEY: ""
       MISTRAL_API_KEY: ""

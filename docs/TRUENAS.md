@@ -24,6 +24,12 @@ Mets au moins une des valeurs suivantes, selon ce que tu as :
   (`OPENROUTER_API_KEY`).
 - **Payants**, seulement si tu le veux : `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`.
 
+- **Mode « dépôt GitHub »**, pour que l'équipe modifie un dépôt existant (y
+  compris celui de Super Agent) : crée un jeton sur GitHub, **Settings** >
+  **Developer settings** > **Fine-grained tokens** > **Generate new token**.
+  Limite-le aux dépôts concernés et donne-lui seulement **Contents** et
+  **Pull requests** en lecture et écriture. C'est la valeur de `GITHUB_TOKEN`.
+
 ## 3. Installer l'application
 
 1. **Apps** > **Discover Apps** > menu ⋮ > **Install via YAML**.

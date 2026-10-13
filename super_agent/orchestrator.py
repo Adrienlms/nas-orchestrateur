@@ -13,12 +13,19 @@ from __future__ import annotations
 
 import json
 import re
+from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Callable
 
 from .agents import ARCHITECT, DEVELOPER, REVIEWER, TESTER, Agent
 from .router import Router
-from .workspace import Workspace, parse_files, render_files
+from .workspace import Workspace, parse_deletions, parse_files, render_files
+
+REPO_RULES = (
+    "Tu travailles sur un dépôt existant, dont le contenu est fourni plus haut. Respecte son "
+    "architecture, son style et ses conventions, et fais le changement le plus petit qui répond "
+    "à la demande. Ne renvoie que les fichiers que tu crées ou modifies, chacun en entier. Pour "
+    "supprimer un fichier, écris une ligne « ### DELETE: chemin/du/fichier ».")
 
 
 @dataclass
@@ -34,6 +41,7 @@ class Report:
     request: str
     spec: str = ""
     files: dict[str, str] = field(default_factory=dict)
+    deleted: list[str] = field(default_factory=list)
     rounds: list[RoundResult] = field(default_factory=list)
     steps: list[str] = field(default_factory=list)
     approved: bool = False
@@ -55,34 +63,57 @@ def parse_review(text: str) -> dict:
 
 class Orchestrator:
     def __init__(self, router: Router, workspace: Workspace, max_rounds: int = 3,
-                 run_tests: bool = True, log: Callable[[str], None] = print):
+                 run_tests: bool = True, log: Callable[[str], None] = print,
+                 repo_context: str | None = None, diff: Callable[[], str] | None = None,
+                 artifacts_dir: Path | None = None):
+        """`repo_context` (contenu d'un dépôt existant) active le mode dépôt :
+        les agents modifient ce code au lieu de partir de zéro, et le relecteur
+        juge le diff fourni par `diff`."""
         self.router = router
         self.ws = workspace
         self.max_rounds = max_rounds
         self.run_tests = run_tests
         self.log = log
+        self.repo_context = repo_context
+        self.diff = diff
+        self.artifacts = Path(artifacts_dir) if artifacts_dir else workspace.root
+
+    def _with_repo(self, prompt: str) -> str:
+        if not self.repo_context:
+            return prompt
+        return f"{self.repo_context}\n\n{REPO_RULES}\n\n{prompt}"
+
+    def _changes(self, report: Report) -> str:
+        if self.diff:
+            return f"Diff par rapport au dépôt :\n{self.diff()[:60_000]}"
+        return f"Fichiers :\n{render_files(report.files)}"
 
     def _ask(self, agent: Agent, prompt: str, report: Report, avoid: str | None = None):
         self.log(f"▶ {agent.role} ({agent.kind})")
         result = self.router.complete(agent.kind, agent.system,
-                                      [{"role": "user", "content": prompt}], avoid_provider=avoid)
+                                      [{"role": "user", "content": self._with_repo(prompt)}],
+                                      avoid_provider=avoid)
         step = f"{agent.role} → {result.provider}/{result.model}"
         report.steps.append(step)
         self.log(f"  ✓ {step}")
         return result
 
     def _apply(self, text: str, report: Report, role: str):
-        files = parse_files(text)
-        if not files:
+        files, deletions = parse_files(text), parse_deletions(text)
+        if not files and not deletions:
             self.log(f"  ⚠ {role} n'a renvoyé aucun fichier exploitable")
         report.files.update(files)
         self.ws.write(files)
+        for rel in self.ws.delete(deletions):
+            report.files.pop(rel, None)
+            report.deleted.append(rel)
+            self.log(f"  supprimé : {rel}")
 
     def run(self, request: str) -> Report:
         report = Report(request)
 
         report.spec = self._ask(ARCHITECT, f"Demande :\n{request}", report).text
-        (self.ws.root / "SPEC.md").write_text(report.spec)
+        (self.artifacts / "SPEC.md").write_text(report.spec)
 
         dev = self._ask(DEVELOPER, f"Spécification :\n{report.spec}", report)
         dev_provider = dev.provider
@@ -99,7 +130,7 @@ class Orchestrator:
 
             review_text = self._ask(
                 REVIEWER,
-                f"Spécification :\n{report.spec}\n\nFichiers :\n{render_files(report.files)}\n\n"
+                f"Spécification :\n{report.spec}\n\n{self._changes(report)}\n\n"
                 f"Résultat des tests :\n{test_output}", report, avoid=dev_provider).text
             review = parse_review(review_text)
             report.rounds.append(RoundResult(number, tests_ok, test_output, review))
@@ -127,7 +158,7 @@ class Orchestrator:
                 fix = self._ask(TESTER, context + f"Remarques sur les tests :\n{tests_fb}", report)
                 self._apply(fix.text, report, "tester")
 
-        (self.ws.root / "REPORT.md").write_text(format_report(report, self.router.usage))
+        (self.artifacts / "REPORT.md").write_text(format_report(report, self.router.usage))
         return report
 
 
@@ -150,4 +181,5 @@ def format_report(report: Report, usage: list[dict]) -> str:
                  f"{total_out} en sortie.\n")
     lines.append("## Fichiers\n")
     lines += [f"- {p}" for p in sorted(report.files)]
+    lines += [f"- {p} (supprimé)" for p in sorted(report.deleted)]
     return "\n".join(lines) + "\n"

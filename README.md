@@ -51,6 +51,27 @@ les fichiers produits et télécharges le projet en .zip. L'onglet
 **Configuration** permet de modifier `config.toml`. Définis
 `SUPER_AGENT_PASSWORD` pour protéger l'accès.
 
+## Travailler sur un dépôt existant
+
+Dans l'interface, choisis **Dépôt GitHub**, colle l'adresse du dépôt et décris
+le changement voulu. L'équipe clone le dépôt, lit son code, fait les
+modifications, lance les tests du dépôt (commande automatique ou celle que tu
+indiques) et boucle avec le relecteur, qui juge le diff. Le résultat arrive
+dans une **pull request** sur une branche `super-agent/…` : rien n'est
+fusionné sans toi. Si le relecteur n'a pas approuvé, la PR est ouverte en
+brouillon.
+
+Il faut un jeton `GITHUB_TOKEN` limité aux dépôts concernés (droits
+**Contents** et **Pull requests**). Les tests lancés par l'équipe ne voient ni
+ce jeton ni les clés d'API.
+
+C'est aussi comme ça que Super Agent s'améliore lui-même : donne-lui l'adresse
+de son propre dépôt, relis sa PR, fusionne-la, et l'image se reconstruit.
+
+Limites : pour un gros dépôt, seuls les fichiers qui tiennent dans le budget
+de contexte (environ 120 000 caractères, README et petits fichiers d'abord)
+sont lus en entier ; les autres n'apparaissent que dans l'arborescence.
+
 ## Sur un NAS ou un serveur, avec Docker
 
 ```bash
@@ -128,6 +149,7 @@ super_agent/
   agents.py        rôles et consignes des agents
   orchestrator.py  enchaînement et boucle critique → correction
   workspace.py     écriture des fichiers produits, exécution des tests
+  repo.py          mode dépôt : clone, diff, branche, pull request
   web.py, static/  interface web
 Dockerfile, docker-compose.yml, docs/TRUENAS.md   déploiement
 config.toml        fournisseurs, modèles, notes
