@@ -7,7 +7,9 @@ FILE_FORMAT = (
     "Pour chaque fichier, écris exactement :\n"
     "### FILE: chemin/relatif.ext\n"
     "```langage\n<contenu complet du fichier>\n```\n"
-    "Donne toujours le contenu complet, jamais d'extrait ni de « … »."
+    "Donne toujours le contenu complet, jamais d'extrait ni de « … ». Si le fichier "
+    "contient lui-même des blocs ```, entoure-le de ```` (quatre accents graves). "
+    "N'écris rien entre deux fichiers."
 )
 
 

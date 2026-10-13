@@ -9,18 +9,42 @@ import subprocess
 import sys
 from pathlib import Path
 
-FILE_BLOCK = re.compile(
-    r"^###\s*FILE:\s*`?(?P<path>[^\s`]+)`?\s*\n```[^\n]*\n(?P<body>.*?)^```\s*$",
-    re.MULTILINE | re.DOTALL,
-)
-
-
+HEADER_LINE = re.compile(r"^###\s*(?:FILE|DELETE):", re.MULTILINE)
+FILE_HEADER = re.compile(r"^###\s*FILE:\s*`?(?P<path>[^\s`]+)`?\s*$", re.MULTILINE)
+OPEN_FENCE = re.compile(r"^(?P<fence>`{3,})[^`\n]*$", re.MULTILINE)
 DELETE_LINE = re.compile(r"^###\s*DELETE:\s*`?(?P<path>[^\s`]+)`?\s*$", re.MULTILINE)
 SECRET_ENV = re.compile(r"(KEY|TOKEN|SECRET|PASSWORD)", re.I)
 
 
 def parse_files(text: str) -> dict[str, str]:
-    return {m.group("path"): m.group("body") for m in FILE_BLOCK.finditer(text)}
+    """Extrait les blocs « ### FILE: chemin » suivis d'un bloc de code.
+
+    Le contenu va jusqu'à la DERNIÈRE clôture de la section (avant l'en-tête
+    suivant) : un fichier Markdown qui contient lui-même des blocs ```…```
+    reste donc entier. Un bloc jamais refermé (réponse coupée) est ignoré
+    plutôt qu'écrit à moitié.
+    """
+    files = {}
+    starts = [m.start() for m in HEADER_LINE.finditer(text)] + [len(text)]
+    for begin, end in zip(starts, starts[1:]):
+        section = text[begin:end]
+        header = FILE_HEADER.match(section)
+        opening = OPEN_FENCE.search(section, header.end()) if header else None
+        if not opening:
+            continue
+        fence = opening.group("fence")
+        body_start = opening.end() + 1
+        closings = [m for m in re.finditer(rf"^{fence}`*[ \t]*$", section[body_start:], re.MULTILINE)]
+        if not closings:
+            continue
+        files[header.group("path")] = section[body_start:body_start + closings[-1].start()]
+    return files
+
+
+def fence_for(content: str) -> str:
+    """Clôture plus longue que toute suite de ` du contenu (blocs imbriqués)."""
+    longest = max((len(run) for run in re.findall(r"`{3,}", content)), default=0)
+    return "`" * max(3, longest + 1)
 
 
 def parse_deletions(text: str) -> list[str]:
@@ -32,8 +56,14 @@ def safe_env() -> dict[str, str]:
     return {k: v for k, v in os.environ.items() if not SECRET_ENV.search(k)}
 
 
+def render_file(path: str, content: str) -> str:
+    fence = fence_for(content)
+    body = content if content.endswith("\n") or not content else content + "\n"
+    return f"### FILE: {path}\n{fence}\n{body}{fence}\n"
+
+
 def render_files(files: dict[str, str]) -> str:
-    return "\n".join(f"### FILE: {p}\n```\n{c}```\n" for p, c in sorted(files.items()))
+    return "\n".join(render_file(p, c) for p, c in sorted(files.items()))
 
 
 class Workspace:
