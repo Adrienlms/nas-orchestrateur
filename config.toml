@@ -1,0 +1,157 @@
+# Configuration de Super Agent
+#
+# Un fournisseur n'est utilisé que si sa clé d'API est présente dans
+# l'environnement (variable indiquée par api_key_env), ou s'il n'en demande pas
+# (Ollama). Les noms de modèles sont des exemples : vérifie-les dans la
+# documentation de chaque fournisseur, ils changent souvent.
+
+[settings]
+strategy = "best"                 # "best" : le meilleur modèle ; "economy" : le moins cher assez bon
+min_score = 7                     # seuil "assez bon" pour la stratégie economy
+max_review_rounds = 3             # tours de critique → correction
+max_tokens = 8000
+quota_cooldown_minutes = 60       # pause d'un fournisseur au quota épuisé (mémorisée entre lancements)
+rate_limit_cooldown_seconds = 60
+transient_cooldown_seconds = 20
+state_file = ".super_agent_state.json"
+
+# ---------------------------------------------------------------- fournisseurs
+# priority départage deux modèles de même note (plus petit = préféré).
+
+[providers.claude_abonnement]      # ton abonnement Pro/Max via Claude Code, sans crédits payants
+type = "claude_code"
+command = "claude"                # Claude Code doit être installé et connecté (/login)
+priority = 0
+timeout = 600
+
+[providers.anthropic]             # API payante : ne définis pas ANTHROPIC_API_KEY pour ne jamais l'utiliser
+type = "anthropic"
+api_key_env = "ANTHROPIC_API_KEY"
+priority = 1
+
+[providers.openai]
+type = "openai_compat"
+base_url = "https://api.openai.com/v1"
+api_key_env = "OPENAI_API_KEY"
+max_tokens_param = "max_completion_tokens"
+priority = 2
+
+[providers.google]
+type = "openai_compat"
+base_url = "https://generativelanguage.googleapis.com/v1beta/openai"
+api_key_env = "GEMINI_API_KEY"
+priority = 3
+
+[providers.mistral]
+type = "openai_compat"
+base_url = "https://api.mistral.ai/v1"
+api_key_env = "MISTRAL_API_KEY"
+priority = 4
+
+[providers.groq]
+type = "openai_compat"
+base_url = "https://api.groq.com/openai/v1"
+api_key_env = "GROQ_API_KEY"
+priority = 5
+
+[providers.openrouter]
+type = "openai_compat"
+base_url = "https://openrouter.ai/api/v1"
+api_key_env = "OPENROUTER_API_KEY"
+priority = 6
+
+[providers.ollama]                # modèles locaux, gratuits, sans clé
+type = "openai_compat"
+base_url = "http://localhost:11434/v1"
+enabled = false                   # passe à true une fois Ollama installé et lancé
+priority = 9
+
+# -------------------------------------------------------------------- modèles
+# cost : 0 gratuit … 5 très cher. scores : compétence de 0 à 10 par type de
+# tâche (architecture, code, test, review). Ces notes sont des estimations de
+# départ : ajuste-les selon ton expérience, c'est ce qui pilote le routage.
+
+# Abonnement : "opus", "sonnet", "haiku" sont les alias de Claude Code.
+[[models]]
+provider = "claude_abonnement"
+name = "opus"
+cost = 0
+scores = { architecture = 10, code = 10, test = 9, review = 10 }
+
+[[models]]
+provider = "claude_abonnement"
+name = "sonnet"
+cost = 0
+scores = { architecture = 9, code = 9.5, test = 9, review = 9 }
+
+[[models]]
+provider = "anthropic"
+name = "claude-opus-5-5"
+cost = 5
+scores = { architecture = 10, code = 10, test = 9, review = 10 }
+
+[[models]]
+provider = "anthropic"
+name = "claude-sonnet-5-5"
+cost = 3
+scores = { architecture = 9, code = 9.5, test = 9, review = 9 }
+
+[[models]]
+provider = "anthropic"
+name = "claude-haiku-5-5"
+cost = 1
+scores = { architecture = 7, code = 8, test = 8, review = 7 }
+
+[[models]]
+provider = "openai"
+name = "gpt-5"
+cost = 4
+scores = { architecture = 9.5, code = 9.5, test = 9, review = 9.5 }
+
+[[models]]
+provider = "openai"
+name = "gpt-5-mini"
+cost = 1
+scores = { architecture = 7.5, code = 8, test = 8, review = 7.5 }
+
+[[models]]
+provider = "google"
+name = "gemini-2.5-pro"
+cost = 3
+scores = { architecture = 9, code = 9, test = 8.5, review = 9 }
+
+[[models]]
+provider = "google"
+name = "gemini-2.5-flash"
+cost = 0
+scores = { architecture = 7.5, code = 8, test = 8, review = 7.5 }
+
+[[models]]
+provider = "mistral"
+name = "mistral-large-latest"
+cost = 2
+scores = { architecture = 8, code = 8, test = 7.5, review = 8 }
+
+[[models]]
+provider = "mistral"
+name = "codestral-latest"
+cost = 1
+scores = { architecture = 6, code = 8.5, test = 8, review = 6.5 }
+
+[[models]]
+provider = "groq"
+name = "llama-3.3-70b-versatile"
+cost = 0
+scores = { architecture = 6.5, code = 7, test = 7, review = 6.5 }
+
+[[models]]
+provider = "openrouter"
+name = "meta-llama/llama-3.3-70b-instruct:free"
+cost = 0
+scores = { architecture = 6.5, code = 7, test = 7, review = 6.5 }
+
+[[models]]
+provider = "ollama"
+name = "qwen2.5-coder:14b"
+cost = 0
+scores = { architecture = 5.5, code = 7, test = 6.5, review = 5.5 }

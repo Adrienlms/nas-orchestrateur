@@ -1,0 +1,26 @@
+# Super Agent pour TrueNAS SCALE (Apps > Discover Apps > Custom App > Install via YAML)
+# ou n'importe quel hôte Docker : docker compose up -d
+services:
+  super-agent:
+    image: ghcr.io/adrienlms/nas-orchestrateur:latest
+    # build: .                      # pour construire l'image localement à la place
+    container_name: super-agent
+    restart: unless-stopped
+    user: "568:568"                 # utilisateur « apps » de TrueNAS
+    ports:
+      - "8090:8080"                 # interface sur http://IP-DU-NAS:8090
+    environment:
+      SUPER_AGENT_PASSWORD: "change-moi"
+      TZ: "Europe/Paris"
+      # Abonnement Claude Pro/Max : jeton obtenu avec « claude setup-token »
+      CLAUDE_CODE_OAUTH_TOKEN: ""
+      # Fournisseurs avec niveau gratuit
+      GEMINI_API_KEY: ""
+      MISTRAL_API_KEY: ""
+      GROQ_API_KEY: ""
+      OPENROUTER_API_KEY: ""
+      # Payants (laisse vide pour ne jamais les utiliser)
+      ANTHROPIC_API_KEY: ""
+      OPENAI_API_KEY: ""
+    volumes:
+      - /mnt/tank/apps/super-agent:/data   # remplace « tank » par le nom de ton pool
