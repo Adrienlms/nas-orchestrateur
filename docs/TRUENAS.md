@@ -42,8 +42,8 @@ Mets au moins une des valeurs suivantes, selon ce que tu as :
    - le port à gauche (`8090`) s'il est déjà pris sur ton NAS.
 4. **Save**. TrueNAS télécharge l'image et démarre le conteneur.
 
-Ouvre ensuite `http://IP-DU-NAS:8090`. Le navigateur demande un identifiant :
-mets ce que tu veux comme nom, et ton mot de passe.
+Ouvre ensuite `http://IP-DU-NAS:8090`. Une page de connexion s'affiche :
+saisis ton mot de passe (session de 7 jours, `/logout` pour te déconnecter).
 
 L'onglet **Fournisseurs** montre qui est prêt. Une tâche qui échoue avec
 « Claude Code n'est pas connecté » veut dire que le jeton est absent ou
@@ -73,14 +73,3 @@ Depuis le shell de TrueNAS (**System** > **Shell**), dans une copie du dépôt :
 
 ```bash
 docker build -t super-agent:local /mnt/TON-POOL/chemin/vers/nas-orchestrateur
-```
-
-puis, dans le YAML, remplace l'image par `super-agent:local` et ajoute
-`pull_policy: never`.
-
-## Sécurité
-
-- Les tests générés par les IA s'exécutent **dans le conteneur**, pas
-  directement sur ton NAS, et le conteneur n'a accès qu'au dossier de données.
-- Garde un mot de passe. N'expose pas le port sur Internet ; pour un accès à
-  distance, passe par un VPN (WireGuard, Tailscale…).
