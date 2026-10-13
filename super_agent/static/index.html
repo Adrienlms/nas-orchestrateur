@@ -1,0 +1,329 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Super Agent</title>
+<style>
+:root {
+  --bg: #f6f7f9; --panel: #ffffff; --line: #e3e6ea; --text: #1d2228; --muted: #69727d;
+  --accent: #4f46e5; --accent-soft: #eef0ff; --ok: #15803d; --ok-soft: #e7f6ec;
+  --warn: #b45309; --warn-soft: #fdf3e2; --bad: #b91c1c; --bad-soft: #fdecec;
+  --code: #f2f4f7; --radius: 10px; --on-accent: #ffffff;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #111418; --panel: #1a1e24; --line: #2b313a; --text: #e6e9ee; --muted: #98a1ad;
+    --accent: #8b85ff; --accent-soft: #24234a; --ok: #4ade80; --ok-soft: #15291d;
+    --warn: #fbbf24; --warn-soft: #2e2512; --bad: #f87171; --bad-soft: #301818; --code: #14171c; --on-accent: #111418;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text);
+  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+header { display: flex; align-items: center; gap: 24px; padding: 14px 24px;
+  background: var(--panel); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+header h1 { font-size: 18px; margin: 0; }
+nav { display: flex; gap: 4px; }
+nav button { background: none; border: 0; padding: 8px 12px; border-radius: 8px;
+  color: var(--muted); font: inherit; cursor: pointer; }
+nav button.active { background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+#quota { margin-left: auto; font-size: 13px; color: var(--muted); }
+main { padding: 24px; max-width: 1280px; margin: 0 auto; }
+.grid { display: grid; grid-template-columns: 340px 1fr; gap: 20px; align-items: start; }
+@media (max-width: 860px) { .grid { grid-template-columns: 1fr; } main { padding: 16px; } }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 18px; }
+.panel + .panel { margin-top: 20px; }
+h2 { font-size: 15px; margin: 0 0 12px; }
+label { display: block; font-size: 13px; color: var(--muted); margin: 12px 0 4px; }
+textarea, select, input[type=number] { width: 100%; font: inherit; color: var(--text);
+  background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+textarea { resize: vertical; }
+.row { display: flex; gap: 10px; }
+.row > div { flex: 1; }
+.check { display: flex; align-items: center; gap: 8px; margin-top: 12px; color: var(--text); font-size: 14px; }
+button.primary, button.secondary { font: inherit; border-radius: 8px; padding: 9px 14px; cursor: pointer; border: 1px solid transparent; }
+button.primary { background: var(--accent); color: var(--on-accent); font-weight: 600; width: 100%; margin-top: 16px; }
+button.secondary { background: none; border-color: var(--line); color: var(--text); }
+button:disabled { opacity: .6; cursor: default; }
+.jobs { list-style: none; margin: 0; padding: 0; }
+.jobs li { padding: 10px; border-radius: 8px; cursor: pointer; display: flex; gap: 10px; align-items: flex-start; }
+.jobs li:hover { background: var(--bg); }
+.jobs li.selected { background: var(--accent-soft); }
+.jobs .req { flex: 1; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; font-size: 14px; }
+.jobs .when { font-size: 12px; color: var(--muted); }
+.badge { font-size: 12px; padding: 2px 8px; border-radius: 99px; white-space: nowrap; font-weight: 600; }
+.b-queued { background: var(--code); color: var(--muted); }
+.b-running { background: var(--accent-soft); color: var(--accent); }
+.b-ok { background: var(--ok-soft); color: var(--ok); }
+.b-warn { background: var(--warn-soft); color: var(--warn); }
+.b-bad { background: var(--bad-soft); color: var(--bad); }
+.muted { color: var(--muted); }
+.empty { color: var(--muted); text-align: center; padding: 40px 10px; }
+.head { display: flex; gap: 12px; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; }
+.head h2 { font-size: 17px; margin: 0; }
+.actions { display: flex; gap: 8px; }
+.steps { display: flex; flex-wrap: wrap; gap: 6px; margin: 14px 0 0; padding: 0; list-style: none; }
+.steps li { font-size: 12px; background: var(--code); border-radius: 6px; padding: 3px 8px; }
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin: 18px 0 12px; }
+.tabs button { background: none; border: 0; border-bottom: 2px solid transparent; padding: 8px 10px;
+  font: inherit; color: var(--muted); cursor: pointer; }
+.tabs button.active { color: var(--text); border-color: var(--accent); }
+pre { background: var(--code); border-radius: 8px; padding: 12px; overflow: auto; margin: 0;
+  font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; max-height: 560px; white-space: pre-wrap; word-break: break-word; }
+.files { display: grid; grid-template-columns: 220px 1fr; gap: 12px; }
+@media (max-width: 700px) { .files { grid-template-columns: 1fr; } }
+.files ul { list-style: none; margin: 0; padding: 0; }
+.files li { padding: 6px 8px; border-radius: 6px; cursor: pointer; font: 13px ui-monospace, Menlo, monospace; word-break: break-all; }
+.files li.selected, .files li:hover { background: var(--accent-soft); }
+.md h1 { font-size: 18px; } .md h2 { font-size: 15px; margin-top: 18px; } .md h3 { font-size: 14px; margin: 14px 0 4px; }
+.md code { background: var(--code); padding: 1px 5px; border-radius: 4px; }
+table { width: 100%; border-collapse: collapse; font-size: 14px; }
+th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { color: var(--muted); font-weight: 600; font-size: 13px; }
+.err { color: var(--bad); margin-top: 10px; font-size: 14px; }
+.ok-msg { color: var(--ok); margin-left: 10px; font-size: 14px; }
+.hidden { display: none !important; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Super Agent</h1>
+  <nav>
+    <button data-view="tasks" class="active">Tâches</button>
+    <button data-view="providers">Fournisseurs</button>
+    <button data-view="config">Configuration</button>
+  </nav>
+  <span id="quota"></span>
+</header>
+
+<main>
+  <!-- Tâches -->
+  <section id="view-tasks" class="grid">
+    <div>
+      <form class="panel" id="new-job">
+        <h2>Nouvelle demande</h2>
+        <textarea id="request" rows="5" placeholder="Ex. : un outil en ligne de commande qui convertit un CSV en JSON" required></textarea>
+        <div class="row">
+          <div>
+            <label for="strategy">Choix des modèles</label>
+            <select id="strategy">
+              <option value="best">Les meilleurs</option>
+              <option value="economy">Économique</option>
+            </select>
+          </div>
+          <div>
+            <label for="rounds">Tours de relecture</label>
+            <input type="number" id="rounds" min="1" max="10" value="3">
+          </div>
+        </div>
+        <label class="check"><input type="checkbox" id="run-tests" checked> Exécuter les tests générés</label>
+        <button class="primary" type="submit">Lancer l'équipe</button>
+        <div class="err" id="form-err"></div>
+      </form>
+      <div class="panel">
+        <h2>Historique</h2>
+        <ul class="jobs" id="jobs"></ul>
+      </div>
+    </div>
+
+    <div class="panel" id="detail">
+      <div class="empty">Lance une demande ou choisis-en une dans l'historique.</div>
+    </div>
+  </section>
+
+  <!-- Fournisseurs -->
+  <section id="view-providers" class="hidden">
+    <div class="panel">
+      <div class="head">
+        <h2>Fournisseurs</h2>
+        <button class="secondary" id="reset">Lever les pauses</button>
+      </div>
+      <p class="muted">Un fournisseur est utilisable quand sa clé est définie dans le conteneur (ou, pour l'abonnement, quand Claude Code est connecté). En pause : quota ou limite atteint, il sera réessayé automatiquement.</p>
+      <table><thead><tr><th>Fournisseur</th><th>Type</th><th>État</th></tr></thead><tbody id="providers"></tbody></table>
+    </div>
+    <div class="panel">
+      <h2>Modèle choisi pour chaque rôle</h2>
+      <table><thead><tr><th>Tâche</th><th>1ᵉʳ choix</th><th>Puis</th></tr></thead><tbody id="ranking"></tbody></table>
+    </div>
+  </section>
+
+  <!-- Configuration -->
+  <section id="view-config" class="hidden">
+    <div class="panel">
+      <div class="head">
+        <h2>config.toml</h2>
+        <div class="actions"><button class="secondary" id="save-config">Enregistrer</button></div>
+      </div>
+      <p class="muted">Fournisseurs, modèles et notes de compétence. Les clés d'API ne vont pas ici : elles se définissent dans les variables d'environnement du conteneur.</p>
+      <textarea id="config" rows="28" spellcheck="false" style="font: 13px/1.5 ui-monospace, Menlo, monospace"></textarea>
+      <div><span class="err" id="config-err"></span><span class="ok-msg" id="config-ok"></span></div>
+    </div>
+  </section>
+</main>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const api = async (path, opts = {}) => {
+  const res = await fetch(path, { headers: { "content-type": "application/json" }, ...opts });
+  const data = res.headers.get("content-type")?.includes("json") ? await res.json() : await res.text();
+  if (!res.ok) throw new Error(data.error || data || res.statusText);
+  return data;
+};
+const ago = (t) => {
+  const s = Math.round(Date.now() / 1000 - t);
+  if (s < 60) return "à l'instant";
+  if (s < 3600) return `il y a ${Math.round(s / 60)} min`;
+  if (s < 86400) return `il y a ${Math.round(s / 3600)} h`;
+  return new Date(t * 1000).toLocaleDateString("fr-FR");
+};
+const badge = (job) => {
+  if (job.status === "queued") return `<span class="badge b-queued">En attente</span>`;
+  if (job.status === "running") return `<span class="badge b-running">En cours…</span>`;
+  if (job.status === "failed") return `<span class="badge b-bad">Échec</span>`;
+  return job.approved ? `<span class="badge b-ok">Approuvé</span>` : `<span class="badge b-warn">Non approuvé</span>`;
+};
+const ROLES = { architect: "Architecte", developer: "Développeur", tester: "Testeur", reviewer: "Relecteur" };
+const KINDS = { architecture: "Architecture", code: "Code", test: "Tests", review: "Relecture" };
+
+function markdown(md) {
+  const inline = (s) => esc(s).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>").replace(/`([^`]+)`/g, "<code>$1</code>");
+  let html = "", list = false;
+  for (const line of md.split("\n")) {
+    const h = line.match(/^(#{1,3})\s+(.*)/), li = line.match(/^\s*[-*]\s+(.*)/);
+    if (!li && list) { html += "</ul>"; list = false; }
+    if (h) html += `<h${h[1].length}>${inline(h[2])}</h${h[1].length}>`;
+    else if (li) { if (!list) { html += "<ul>"; list = true; } html += `<li>${inline(li[1])}</li>`; }
+    else if (line.trim()) html += `<p>${inline(line)}</p>`;
+  }
+  return html + (list ? "</ul>" : "");
+}
+
+// ---- navigation -------------------------------------------------------
+document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
+  document.querySelectorAll("nav button").forEach(x => x.classList.toggle("active", x === b));
+  for (const v of ["tasks", "providers", "config"]) $(`#view-${v}`).classList.toggle("hidden", v !== b.dataset.view);
+  if (b.dataset.view === "providers") loadStatus();
+  if (b.dataset.view === "config") loadConfig();
+});
+
+// ---- tâches ------------------------------------------------------------
+let selected = null, detailTab = "log", selectedFile = null, timer = null;
+try { selected = localStorage.getItem("sa-job"); } catch {}
+
+async function loadJobs() {
+  const jobs = await api("/api/jobs");
+  $("#jobs").innerHTML = jobs.length ? jobs.map(j => `
+    <li data-id="${j.id}" class="${j.id === selected ? "selected" : ""}">
+      <div class="req">${esc(j.request)}<div class="when">${ago(j.created)}</div></div>${badge(j)}
+    </li>`).join("") : `<li class="muted">Aucune tâche pour l'instant.</li>`;
+  $("#jobs").querySelectorAll("li[data-id]").forEach(li => li.onclick = () => select(li.dataset.id));
+  return jobs;
+}
+
+function select(id) {
+  selected = id; selectedFile = null; detailTab = "log";
+  try { localStorage.setItem("sa-job", id); } catch {}
+  loadJobs(); loadDetail();
+}
+
+async function loadDetail() {
+  clearTimeout(timer);
+  if (!selected) return;
+  let job;
+  try { job = await api(`/api/jobs/${selected}`); }
+  catch { selected = null; $("#detail").innerHTML = `<div class="empty">Tâche introuvable.</div>`; return; }
+  const live = job.status === "running" || job.status === "queued";
+  if (!live && detailTab === "log" && job.report && !$("#detail").dataset.seen?.includes(job.id)) detailTab = "report";
+  $("#detail").dataset.seen = job.id;
+  const steps = (job.steps.length ? job.steps : []).map(s => {
+    const [role, who] = s.split(" → ");
+    return `<li>${esc(ROLES[role] || role)} · ${esc(who)}</li>`;
+  }).join("");
+  const tab = (id, label, show = true) => show ? `<button data-tab="${id}" class="${detailTab === id ? "active" : ""}">${label}</button>` : "";
+  let body = "";
+  if (detailTab === "log") body = `<pre id="log">${esc(job.log || "En attente de démarrage…")}</pre>`;
+  if (detailTab === "report") body = `<div class="md">${markdown(job.report || "")}</div>`;
+  if (detailTab === "files") body = `<div class="files"><ul>${job.files.map(f =>
+      `<li data-file="${esc(f)}" class="${f === selectedFile ? "selected" : ""}">${esc(f)}</li>`).join("")}</ul>
+      <pre id="file-view">${selectedFile ? "Chargement…" : "Choisis un fichier."}</pre></div>`;
+  $("#detail").innerHTML = `
+    <div class="head">
+      <div><h2>${esc(job.request)}</h2><div class="muted" style="font-size:13px">${ago(job.created)}
+        · ${job.options.strategy === "economy" ? "économique" : "meilleurs modèles"} · ${job.options.rounds} tours max</div></div>
+      <div class="actions">${badge(job)}</div>
+    </div>
+    ${job.error ? `<div class="err">${esc(job.error)}</div>` : ""}
+    ${steps ? `<ul class="steps">${steps}</ul>` : ""}
+    <div class="tabs">${tab("log", "Journal")}${tab("report", "Rapport", !!job.report)}${tab("files", `Fichiers (${job.files.length})`, job.files.length > 0)}</div>
+    ${body}
+    <div class="actions" style="margin-top:14px">
+      ${job.files.length ? `<button class="secondary" onclick="location.href='/api/jobs/${job.id}/zip'">Télécharger le projet (.zip)</button>` : ""}
+      ${!live ? `<button class="secondary" id="delete">Supprimer</button>` : ""}
+    </div>`;
+  $("#detail").querySelectorAll("[data-tab]").forEach(b => b.onclick = () => { detailTab = b.dataset.tab; loadDetail(); });
+  $("#detail").querySelectorAll("[data-file]").forEach(li => li.onclick = () => { selectedFile = li.dataset.file; loadDetail(); });
+  if (detailTab === "files" && selectedFile) {
+    api(`/api/jobs/${job.id}/file?path=${encodeURIComponent(selectedFile)}`)
+      .then(t => $("#file-view").textContent = t).catch(e => $("#file-view").textContent = e.message);
+  }
+  const log = $("#log"); if (log) log.scrollTop = log.scrollHeight;
+  const del = $("#delete");
+  if (del) del.onclick = async () => {
+    if (!confirm("Supprimer cette tâche et ses fichiers ?")) return;
+    await api(`/api/jobs/${job.id}`, { method: "DELETE" });
+    selected = null; $("#detail").innerHTML = `<div class="empty">Tâche supprimée.</div>`; loadJobs();
+  };
+  if (live) timer = setTimeout(() => { loadDetail(); loadJobs(); }, 2000);
+}
+
+$("#new-job").onsubmit = async (e) => {
+  e.preventDefault();
+  $("#form-err").textContent = "";
+  const btn = e.submitter; btn.disabled = true;
+  try {
+    const job = await api("/api/jobs", { method: "POST", body: JSON.stringify({
+      request: $("#request").value, strategy: $("#strategy").value,
+      rounds: +$("#rounds").value, run_tests: $("#run-tests").checked }) });
+    $("#request").value = "";
+    select(job.id);
+  } catch (err) { $("#form-err").textContent = err.message; }
+  btn.disabled = false;
+};
+
+// ---- fournisseurs ------------------------------------------------------
+async function loadStatus() {
+  const s = await api("/api/status");
+  const ready = s.providers.filter(p => p.state === "ready").length;
+  $("#quota").textContent = `${ready} fournisseur${ready > 1 ? "s" : ""} prêt${ready > 1 ? "s" : ""}`;
+  $("#providers").innerHTML = s.providers.map(p => {
+    let state = { ready: `<span class="badge b-ok">Prêt</span>`, off: `<span class="badge b-queued">Inactif</span>`,
+                  paused: `<span class="badge b-warn">En pause</span>` }[p.state];
+    if (p.until) {
+      const left = Math.max(0, Math.round((p.until - s.now) / 60));
+      state += ` <span class="muted">${esc(p.detail)}, encore ${left < 60 ? left + " min" : Math.round(left / 60) + " h"}</span>`;
+    } else if (p.detail) state += ` <span class="muted">${esc(p.detail)}</span>`;
+    return `<tr><td>${esc(p.name)}</td><td class="muted">${esc(p.type)}</td><td>${state}</td></tr>`;
+  }).join("");
+  $("#ranking").innerHTML = Object.entries(s.ranking).map(([k, list]) => `<tr><td>${KINDS[k] || k}</td>
+    <td>${list[0] ? `${esc(list[0].provider)} / <b>${esc(list[0].model)}</b> <span class="muted">(${list[0].score})</span>` : `<span class="err">aucun modèle disponible</span>`}</td>
+    <td class="muted">${list.slice(1).map(m => `${esc(m.provider)} / ${esc(m.model)}`).join(", ")}</td></tr>`).join("");
+}
+$("#reset").onclick = async () => { await api("/api/reset", { method: "POST" }); loadStatus(); };
+
+// ---- configuration -----------------------------------------------------
+async function loadConfig() { $("#config").value = (await api("/api/config")).toml; }
+$("#save-config").onclick = async () => {
+  $("#config-err").textContent = ""; $("#config-ok").textContent = "";
+  try {
+    await api("/api/config", { method: "PUT", body: JSON.stringify({ toml: $("#config").value }) });
+    $("#config-ok").textContent = "Enregistré.";
+  } catch (e) { $("#config-err").textContent = e.message; }
+};
+
+loadJobs(); loadDetail(); loadStatus();
+setInterval(loadStatus, 30000);
+</script>
+</body>
+</html>
