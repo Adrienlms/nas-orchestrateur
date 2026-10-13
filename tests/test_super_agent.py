@@ -11,7 +11,7 @@ from super_agent.errors import (AuthError, FatalRequestError, NoModelAvailable, 
                                 RateLimited, TransientError, classify)
 from super_agent.providers import ClaudeCodeProvider
 from super_agent.orchestrator import Orchestrator, parse_review
-from super_agent.workspace import Workspace, parse_files
+from super_agent.workspace import Workspace, parse_files, render_files
 
 quiet = lambda *_: None
 
@@ -144,6 +144,25 @@ class TestWorkspace(unittest.TestCase):
     def test_parse_files(self):
         text = "Voici :\n### FILE: pkg/a.py\n```python\nx = 1\n```\n### FILE: `b.txt`\n```\nhi\n```\n"
         self.assertEqual(parse_files(text), {"pkg/a.py": "x = 1\n", "b.txt": "hi\n"})
+
+    def test_markdown_with_nested_code_blocks_stays_whole(self):
+        readme = "# Titre\n\n```bash\npython -m demo\n```\n\nSuite importante\n"
+        text = (f"### FILE: README.md\n```markdown\n{readme}```\n\n"
+                "### FILE: a.py\n```python\nx = 1\n```\n")
+        self.assertEqual(parse_files(text), {"README.md": readme, "a.py": "x = 1\n"})
+
+    def test_four_backtick_fence(self):
+        text = "### FILE: doc.md\n````md\n```\ncode\n```\n````\n"
+        self.assertEqual(parse_files(text), {"doc.md": "```\ncode\n```\n"})
+
+    def test_unclosed_block_is_ignored(self):
+        text = "### FILE: a.py\n```python\nx = 1\n### FILE: b.py\n```\ny = 2\n```\n"
+        self.assertEqual(parse_files(text), {"b.py": "y = 2\n"})
+
+    def test_render_then_parse_round_trip(self):
+        files = {"README.md": "# T\n\n```bash\nls\n```\nfin\n", "x.py": "a = 1"}
+        parsed = parse_files(render_files(files))
+        self.assertEqual(parsed, {"README.md": files["README.md"], "x.py": "a = 1\n"})
 
     def test_rejects_path_escape(self):
         with tempfile.TemporaryDirectory() as d:

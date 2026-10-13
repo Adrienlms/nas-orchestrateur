@@ -17,6 +17,8 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+from .workspace import render_file
+
 GITHUB_URL = re.compile(r"^https://github\.com/([\w.-]+)/([\w.-]+?)(?:\.git)?/?$")
 SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", "dist", "build"}
 SKIP_FILES = {"package-lock.json", "yarn.lock", "pnpm-lock.yaml", "poetry.lock", "Cargo.lock"}
@@ -91,7 +93,7 @@ class GitRepo:
             if used + len(content) > budget:
                 skipped.append(rel)
                 continue
-            parts.append(f"### FILE: {rel}\n```\n{content}```\n")
+            parts.append(render_file(rel, content))
             used += len(content)
         note = (f"\n(Fichiers non inclus faute de place : {', '.join(skipped)})\n" if skipped else "")
         return f"Arborescence du dépôt :\n{tree}\n\nContenu :\n{''.join(parts)}{note}"
