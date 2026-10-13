@@ -4,12 +4,18 @@
 
 Variables d'environnement :
     SUPER_AGENT_DATA      dossier des données (config, historique)   défaut : ./data
-    SUPER_AGENT_PASSWORD  mot de passe de l'interface (utilisateur libre) ; vide = pas de mot de passe
+    SUPER_AGENT_PASSWORD  mot de passe de l'interface ; vide = pas de mot de passe
+
+Quand un mot de passe est défini, une page de connexion (/login) ouvre une
+session par cookie, valable 7 jours. L'en-tête « Authorization: Basic » reste
+accepté pour les scripts. /logout déconnecte.
 """
 from __future__ import annotations
 
 import base64
+import hashlib
 import hmac
+import http.cookies
 import io
 import json
 import os
@@ -22,7 +28,6 @@ import tomllib
 import traceback
 import uuid
 import zipfile
-from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -34,6 +39,59 @@ from .router import status_report
 from .workspace import Workspace
 
 STATIC = Path(__file__).resolve().parent / "static"
+
+SESSION_COOKIE = "sa_session"
+SESSION_TTL = 7 * 24 * 3600
+LOGIN_FAIL_DELAY = 1.0          # secondes d'attente après un mauvais mot de passe
+
+# Un verrou par adresse IP : les échecs d'un même client passent un par un (sans
+# cela, des requêtes parallèles contourneraient le délai), sans bloquer les
+# autres clients. Limite connue : derrière un proxy inverse, tous les clients
+# partagent la même IP et donc le même verrou ; acceptable sur un NAS en réseau local.
+_FAIL_LOCKS: dict[str, threading.Lock] = {}
+_FAIL_LOCKS_GUARD = threading.Lock()
+_FAIL_LOCKS_MAX = 1024
+
+
+def _login_failed(client: str):
+    """Freine la force brute, quel que soit le moyen d'authentification essayé."""
+    with _FAIL_LOCKS_GUARD:
+        if len(_FAIL_LOCKS) > _FAIL_LOCKS_MAX:       # évite une croissance sans fin
+            for ip in [ip for ip, lock in _FAIL_LOCKS.items() if not lock.locked()]:
+                del _FAIL_LOCKS[ip]
+        lock = _FAIL_LOCKS.setdefault(client, threading.Lock())
+    with lock:
+        time.sleep(LOGIN_FAIL_DELAY)
+
+
+# ---- session sans état ---------------------------------------------------
+def _session_signature(expiry: int, password: str) -> str:
+    key = hashlib.sha256(b"super-agent-session:" + password.encode()).digest()
+    return hmac.new(key, str(expiry).encode(), "sha256").hexdigest()
+
+
+def make_session(password: str, now: float | None = None) -> str:
+    """Jeton « expiration.signature », invalide dès que le mot de passe change."""
+    expiry = int((time.time() if now is None else now) + SESSION_TTL)
+    return f"{expiry}.{_session_signature(expiry, password)}"
+
+
+def check_session(token: str, password: str, now: float | None = None) -> bool:
+    if not token or not isinstance(token, str):
+        return False
+    expiry_text, sep, signature = token.partition(".")
+    if not sep or not re.fullmatch(r"[0-9]{1,12}", expiry_text):
+        return False
+    expiry = int(expiry_text)
+    expected = _session_signature(expiry, password)
+    if not hmac.compare_digest(signature.encode(), expected.encode()):
+        return False
+    return expiry > (time.time() if now is None else now)
+
+
+def _session_cookie(token: str, max_age: int) -> str:
+    # Pas d'attribut Secure : l'accès sur le NAS se fait en HTTP sur le réseau local.
+    return f"{SESSION_COOKIE}={token}; HttpOnly; SameSite=Strict; Path=/; Max-Age={max_age}"
 
 
 def write_json(path: Path, data: dict):
@@ -166,6 +224,10 @@ class JobStore:
         self.update(job["id"], status="done", finished=time.time())
 
 
+PUBLIC_ROUTES = {("GET", "/login"), ("POST", "/api/login"),
+                 ("POST", "/api/logout"), ("GET", "/logout")}
+
+
 def make_handler(store: JobStore, password: str):
     class Handler(BaseHTTPRequestHandler):
         server_version = "SuperAgent"
@@ -174,16 +236,38 @@ def make_handler(store: JobStore, password: str):
             pass
 
         # ---- utilitaires --------------------------------------------
+        def _client(self) -> str:
+            return self.client_address[0] if self.client_address else "?"
+
+        def _session_token(self) -> str:
+            header = self.headers.get("cookie", "")
+            if not header:
+                return ""
+            cookies = http.cookies.SimpleCookie()
+            try:
+                cookies.load(header)
+            except http.cookies.CookieError:
+                return ""
+            morsel = cookies.get(SESSION_COOKIE)
+            return morsel.value if morsel else ""
+
+        def _has_session(self) -> bool:
+            return check_session(self._session_token(), password)
+
         def _authorized(self) -> bool:
             if not password:
+                return True
+            if self._has_session():
                 return True
             header = self.headers.get("authorization", "")
             if header.startswith("Basic "):
                 try:
                     _, _, given = base64.b64decode(header[6:]).decode().partition(":")
                 except (ValueError, UnicodeDecodeError):
-                    return False
-                return hmac.compare_digest(given, password)
+                    given = None
+                if given is not None and hmac.compare_digest(given.encode(), password.encode()):
+                    return True
+                _login_failed(self._client())           # même frein que POST /api/login
             return False
 
         def _send(self, status: int, body: bytes, ctype: str, extra: dict | None = None):
@@ -196,8 +280,18 @@ def make_handler(store: JobStore, password: str):
             self.end_headers()
             self.wfile.write(body)
 
-        def _json(self, data, status: int = 200):
-            self._send(status, json.dumps(data, ensure_ascii=False).encode(), "application/json")
+        def _redirect(self, location: str, extra: dict | None = None):
+            self.send_response(303)
+            self.send_header("location", location)
+            self.send_header("content-length", "0")
+            self.send_header("cache-control", "no-store")
+            for k, v in (extra or {}).items():
+                self.send_header(k, v)
+            self.end_headers()
+
+        def _json(self, data, status: int = 200, extra: dict | None = None):
+            self._send(status, json.dumps(data, ensure_ascii=False).encode(), "application/json",
+                       extra)
 
         def _error(self, status: int, message: str):
             self._json({"error": message}, status)
@@ -206,13 +300,17 @@ def make_handler(store: JobStore, password: str):
             length = int(self.headers.get("content-length") or 0)
             if length > 1_000_000:
                 raise ValueError("requête trop volumineuse")
-            return json.loads(self.rfile.read(length) or b"{}")
+            body = json.loads(self.rfile.read(length) or b"{}")
+            if not isinstance(body, dict):
+                raise ValueError("objet JSON attendu")
+            return body
 
         def _dispatch(self, method: str):
-            if not self._authorized():
-                return self._send(401, b"Mot de passe requis", "text/plain; charset=utf-8",
-                                  {"www-authenticate": 'Basic realm="Super Agent"'})
             url = urlparse(self.path)
+            if (method, url.path) not in PUBLIC_ROUTES and not self._authorized():
+                if method == "GET" and not url.path.startswith("/api/"):
+                    return self._redirect("/login")
+                return self._error(401, "connexion requise")
             for pattern, handler_method, func in ROUTES:
                 match = re.fullmatch(pattern, url.path)
                 if match and handler_method == method:
@@ -235,6 +333,30 @@ def make_handler(store: JobStore, password: str):
 
         def do_DELETE(self):
             self._dispatch("DELETE")
+
+        # ---- connexion ----------------------------------------------
+        def login_page(self, query):
+            # Seul le cookie compte ici : un ancien en-tête Basic gardé en cache par
+            # le navigateur ne doit pas retarder l'affichage de la page de connexion.
+            if not password or self._has_session():
+                return self._redirect("/")
+            self._send(200, (STATIC / "login.html").read_bytes(), "text/html; charset=utf-8")
+
+        def login(self, query):
+            given = str(self._body().get("password", ""))
+            if not password:
+                return self._json({"ok": True})
+            if hmac.compare_digest(given.encode(), password.encode()):
+                cookie = _session_cookie(make_session(password), SESSION_TTL)
+                return self._json({"ok": True}, extra={"set-cookie": cookie})
+            _login_failed(self._client())               # freine la force brute
+            self._error(401, "mot de passe incorrect")
+
+        def logout_api(self, query):
+            self._json({"ok": True}, extra={"set-cookie": _session_cookie("", 0)})
+
+        def logout_page(self, query):
+            self._redirect("/login", {"set-cookie": _session_cookie("", 0)})
 
         # ---- routes -------------------------------------------------
         def index(self, query):
@@ -321,6 +443,10 @@ def make_handler(store: JobStore, password: str):
 
     ROUTES = [
         (r"/", "GET", Handler.index),
+        (r"/login", "GET", Handler.login_page),
+        (r"/logout", "GET", Handler.logout_page),
+        (r"/api/login", "POST", Handler.login),
+        (r"/api/logout", "POST", Handler.logout_api),
         (r"/api/status", "GET", Handler.status),
         (r"/api/reset", "POST", Handler.reset),
         (r"/api/jobs", "GET", Handler.jobs),
