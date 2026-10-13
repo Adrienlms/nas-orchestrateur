@@ -1,6 +1,7 @@
 """Dossier de travail : extraction des fichiers produits et exécution des tests."""
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import os
 import re
@@ -13,6 +14,7 @@ HEADER_LINE = re.compile(r"^###\s*(?:FILE|DELETE):", re.MULTILINE)
 FILE_HEADER = re.compile(r"^###\s*FILE:\s*`?(?P<path>[^\s`]+)`?\s*$", re.MULTILINE)
 OPEN_FENCE = re.compile(r"^(?P<fence>`{3,})[^`\n]*$", re.MULTILINE)
 DELETE_LINE = re.compile(r"^###\s*DELETE:\s*`?(?P<path>[^\s`]+)`?\s*$", re.MULTILINE)
+IGNORED_DIRS = {".git", "__pycache__", ".pytest_cache", "node_modules", ".venv", "venv"}
 SECRET_ENV = re.compile(r"(KEY|TOKEN|SECRET|PASSWORD)", re.I)
 
 
@@ -52,8 +54,12 @@ def parse_deletions(text: str) -> list[str]:
 
 
 def safe_env() -> dict[str, str]:
-    """Environnement des tests générés, sans clés d'API ni jetons."""
-    return {k: v for k, v in os.environ.items() if not SECRET_ENV.search(k)}
+    """Environnement des tests générés, sans clés d'API ni jetons.
+
+    Les GIT_CONFIG_* partent ensemble : retirer seulement GIT_CONFIG_KEY_0 casserait git.
+    """
+    return {k: v for k, v in os.environ.items()
+            if not SECRET_ENV.search(k) and not k.startswith("GIT_CONFIG_")}
 
 
 def render_file(path: str, content: str) -> str:
@@ -96,6 +102,27 @@ class Workspace:
                 deleted.append(rel)
         return deleted
 
+    def snapshot(self) -> dict[str, str]:
+        """Empreinte de chaque fichier, pour savoir ensuite ce qu'un agent a changé."""
+        prints = {}
+        for path in self.root.rglob("*"):
+            rel = path.relative_to(self.root)
+            if path.is_file() and not set(rel.parts) & IGNORED_DIRS:
+                prints[rel.as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
+        return prints
+
+    def changes(self, before: dict[str, str]) -> tuple[dict[str, str], list[str]]:
+        """Fichiers créés ou modifiés depuis `before` (avec leur contenu) et fichiers supprimés."""
+        after = self.snapshot()
+        changed = {}
+        for rel, digest in sorted(after.items()):
+            if before.get(rel) != digest:
+                try:
+                    changed[rel] = (self.root / rel).read_text()
+                except UnicodeDecodeError:
+                    changed[rel] = "(fichier binaire)"
+        return changed, sorted(set(before) - set(after))
+
     def _default_test_command(self) -> list[str] | None:
         if (self.root / "package.json").exists() and not any(self.root.glob("*.py")):
             return ["npm", "test", "--silent"]
@@ -105,7 +132,7 @@ class Workspace:
             return [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-t", "."]
         return [sys.executable, "-m", "unittest", "discover", "-p", "test*.py"]
 
-    def run_tests(self, timeout: int = 120) -> tuple[bool, str]:
+    def run_tests(self, timeout: int = 120) -> tuple[bool | None, str]:
         """Lance les tests générés. Attention : exécute du code produit par une IA."""
         cmd = shlex.split(self.test_command) if self.test_command else self._default_test_command()
         try:
@@ -118,4 +145,6 @@ class Workspace:
         output = (proc.stdout + proc.stderr).strip()
         if len(output) > 6000:
             output = output[:2000] + "\n…\n" + output[-4000:]
+        if proc.returncode == 5:                   # unittest et pytest : aucun test trouvé
+            return None, output or "aucun test trouvé"
         return proc.returncode == 0, output

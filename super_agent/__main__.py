@@ -15,7 +15,8 @@ import time
 
 from .config import build_router, load_config
 from .errors import NoModelAvailable
-from .orchestrator import Orchestrator
+from .agent_mode import make_runner
+from .orchestrator import Orchestrator, usage_line
 from .router import status_report
 from .workspace import Workspace
 
@@ -43,11 +44,11 @@ def cmd_run(args):
     if args.strategy:
         config.setdefault("settings", {})["strategy"] = args.strategy
     router = build_router(config)
-    rounds = args.rounds or config.get("settings", {}).get("max_review_rounds", 3)
-    orch = Orchestrator(router, Workspace(args.out), rounds, run_tests=not args.no_tests)
-    report = orch.run(args.request)
+    rounds = args.rounds or config.get("settings", {}).get("max_review_rounds", 2)
+    ws = Workspace(args.out)
+    report = make_runner(router, ws, rounds, run_tests=not args.no_tests, mode=args.mode).run(args.request)
     print(f"\n{'✅ Approuvé' if report.approved else '⚠ Non approuvé'} — "
-          f"fichiers et REPORT.md dans {orch.ws.root}")
+          f"fichiers et REPORT.md dans {ws.root}\n{usage_line(router.usage)}")
 
 
 def cmd_status(args):
@@ -90,6 +91,8 @@ def main(argv=None):
     run.add_argument("--out", default="sortie", help="dossier de travail (défaut : sortie)")
     run.add_argument("--rounds", type=int, help="tours de relecture maximum")
     run.add_argument("--strategy", choices=["best", "economy"])
+    run.add_argument("--mode", choices=["agent", "team"],
+                     help="agent : une session Claude Code avec outils (défaut) ; team : l'équipe multi-IA")
     run.add_argument("--no-tests", action="store_true",
                      help="ne pas exécuter les tests générés")
     run.set_defaults(func=cmd_run)

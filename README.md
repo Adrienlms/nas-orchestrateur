@@ -1,15 +1,26 @@
 # Super Agent
 
-Une équipe d'agents IA qui développe à ta place : un **architecte** rédige la
-spécification, un **développeur** écrit le code, un **testeur** écrit les tests,
-puis un **relecteur** juge le résultat. Tant que ce n'est pas approuvé, le code
-repart en correction (boucle critique → correction, 3 tours par défaut).
+Super Agent réalise des demandes de développement à ta place, sur un nouveau
+projet ou sur un dépôt GitHub existant, et propose le résultat dans une pull
+request. Il a deux façons de travailler :
 
-Chaque agent est servi par **le modèle le plus compétent disponible** pour sa
-tâche, parmi plusieurs fournisseurs (Anthropic, OpenAI, Google, Mistral, Groq,
-OpenRouter, Ollama en local). Quand un fournisseur n'a plus de crédit ou de
-quota, le système **bascule automatiquement** sur le suivant et s'en souvient
-pendant une heure.
+- **Agent Claude** (par défaut) : une seule session Claude Code, sur ton
+  abonnement, travaille directement dans le dossier. Elle cherche et lit
+  seulement les fichiers utiles, modifie les lignes nécessaires et garde son
+  contexte d'un tour à l'autre. Super Agent lance ensuite les tests, fait
+  relire le diff par une autre IA (gratuite si tu en as configuré une) et
+  renvoie les remarques à la même session tant que ce n'est pas approuvé.
+  C'est le mode le plus économe en quota et celui qui donne les meilleurs
+  résultats.
+- **Équipe multi-IA** : un **architecte** rédige la spécification, un
+  **développeur** écrit le code, un **testeur** écrit les tests et un
+  **relecteur** juge le résultat. Chaque rôle est servi par le modèle le plus
+  compétent disponible parmi plusieurs fournisseurs (Anthropic, OpenAI,
+  Google, Mistral, Groq, OpenRouter, Ollama en local). Utile quand l'abonnement
+  Claude est épuisé : Super Agent y bascule tout seul.
+
+Quand un fournisseur n'a plus de crédit ou de quota, il est mis en pause
+jusqu'à sa recharge et le système bascule sur le suivant.
 
 Python 3.11 ou plus, aucune dépendance à installer.
 
@@ -35,8 +46,9 @@ python -m super_agent run "Un convertisseur CSV vers JSON en ligne de commande" 
 Le dossier de sortie contient le code, les tests, `SPEC.md` et `REPORT.md`
 (qui a fait quoi, remarques de chaque tour, jetons consommés).
 
-Options utiles : `--strategy economy` (le modèle le moins cher jugé assez bon
-plutôt que le meilleur), `--rounds 5`, `--no-tests` (ne pas exécuter les tests
+Options utiles : `--mode team` (l'équipe multi-IA au lieu de l'agent Claude),
+`--strategy economy` (en mode équipe, le modèle le moins cher jugé assez bon
+plutôt que le meilleur), `--rounds 3`, `--no-tests` (ne pas exécuter les tests
 générés). `python -m super_agent reset` efface les pauses mémorisées.
 
 ## Interface web
@@ -68,9 +80,38 @@ ce jeton ni les clés d'API.
 C'est aussi comme ça que Super Agent s'améliore lui-même : donne-lui l'adresse
 de son propre dépôt, relis sa PR, fusionne-la, et l'image se reconstruit.
 
-Limites : pour un gros dépôt, seuls les fichiers qui tiennent dans le budget
-de contexte (environ 120 000 caractères, README et petits fichiers d'abord)
-sont lus en entier ; les autres n'apparaissent que dans l'arborescence.
+En mode agent, la session lit elle-même les fichiers dont elle a besoin, quelle
+que soit la taille du dépôt. En mode équipe, seuls l'architecte et le
+développeur reçoivent le contenu du dépôt, dans la limite d'environ 120 000
+caractères (README et petits fichiers d'abord) ; le testeur et le relecteur ne
+voient que la spécification et le diff.
+
+## Consommation du quota Claude
+
+Chaque tâche affiche ce qu'elle a consommé : nombre d'appels, jetons lus
+(contexte relu depuis le cache compris) et un **équivalent API** en dollars.
+Il n'est pas facturé avec l'abonnement, mais c'est ce qui pèse sur ta fenêtre
+de 5 heures.
+
+Réglages qui comptent, dans `config.toml` :
+
+| Réglage | Défaut | Effet |
+|---|---|---|
+| `agent_model` | `sonnet` | `opus` épuise le quota Pro plusieurs fois plus vite |
+| `max_review_rounds` | 2 | chaque tour de correction relance une session |
+| `max_calls_per_task` | 12 | garde-fou : la tâche s'arrête au-delà |
+| `agent_review` | `true` | relecture du diff ; mets `false` pour l'économiser |
+
+Ordre de grandeur sur ce dépôt (ajout d'une commande avec un test) : en mode
+agent, 2 appels et environ 85 000 jetons lus, approuvé ; en mode équipe, 6
+appels, environ 120 000 jetons lus, quatre fois plus de jetons écrits, et
+non approuvé. Sur un plan Pro, compte quelques tâches moyennes par fenêtre de
+5 heures avec Sonnet, bien moins avec Opus.
+
+Si tu as installé une version précédente, ton `config.toml` (dans le dossier
+de données) garde les anciens réglages, où Opus servait pour tout. Dans
+l'onglet **Configuration**, clique sur **Config par défaut** puis sur
+**Enregistrer**.
 
 ## Sur un NAS ou un serveur, avec Docker
 
@@ -102,21 +143,23 @@ utilisable ainsi. Cet usage via Claude Code est prévu pour toi seul, sur ta
 machine : Anthropic n'autorise pas à revendre ou partager l'accès d'un
 abonnement dans un produit tiers.
 
-Fournisseurs avec un niveau gratuit (conditions et limites changent souvent,
-vérifie sur leur site) :
+### Les offres gratuites, vérifiées en octobre 2026
 
-| Fournisseur | Gratuit | Variable |
-|---|---|---|
-| Google Gemini (AI Studio) | oui, avec limites journalières | `GEMINI_API_KEY` |
-| Mistral | offre « Experiment » gratuite, limitée | `MISTRAL_API_KEY` |
-| Groq | oui, avec limites de débit | `GROQ_API_KEY` |
-| OpenRouter | modèles suffixés `:free`, limités | `OPENROUTER_API_KEY` |
-| Ollama | gratuit et illimité, tourne sur ton ordinateur | aucune (`enabled = true`) |
-| Anthropic, OpenAI | payants à l'usage | `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` |
+Une précision d'abord : ces sites affichent tous des formules payantes et
+mettent souvent en avant un « plan ». Les offres ci-dessous sont gratuites,
+mais limitées, et elles changent souvent.
 
-Une combinaison sans frais : Gemini + Groq + Mistral + Ollama. Avec un peu de
-crédit Anthropic, Claude passe en premier et les gratuits prennent le relais
-quand il est épuisé.
+| Fournisseur | Ce qui est gratuit | Ce qu'il faut | Variable |
+|---|---|---|---|
+| Google Gemini | `gemini-3.8-flash` et les modèles « Flash » ; **pas** les modèles Pro | un compte Google, une clé créée sur [aistudio.google.com](https://aistudio.google.com/apikey) sans carte ; tes requêtes servent à améliorer leurs produits | `GEMINI_API_KEY` |
+| Groq | plan gratuit, par exemple `openai/gpt-oss-120b` (environ 1 000 requêtes par jour) | un compte sur [console.groq.com](https://console.groq.com) | `GROQ_API_KEY` |
+| Mistral | offre « Experiment » | un numéro de téléphone vérifié, sans carte ; les requêtes peuvent servir à entraîner leurs modèles | `MISTRAL_API_KEY` |
+| OpenRouter | les modèles dont le nom finit par `:free`, 50 requêtes par jour (1 000 après un achat unique de 10 crédits) | un compte ; la liste change souvent, choisis un modèle sur [openrouter.ai/models?max_price=0](https://openrouter.ai/models?max_price=0) et ajoute-le dans `config.toml` | `OPENROUTER_API_KEY` |
+| Ollama | tout, sans limite | un ordinateur assez puissant pour faire tourner le modèle | aucune (`enabled = true`) |
+| Anthropic, OpenAI | rien | crédits payants à l'usage | `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` |
+
+Ces modèles gratuits sont nettement moins bons que Claude pour coder. Ils
+servent surtout de relecteur et de relais quand l'abonnement est épuisé.
 
 ## Régler le choix des modèles
 
@@ -147,7 +190,8 @@ super_agent/
   errors.py        classement des erreurs (quota, débit, panne…)
   router.py        choix du modèle par tâche, bascule, pauses mémorisées
   agents.py        rôles et consignes des agents
-  orchestrator.py  enchaînement et boucle critique → correction
+  agent_mode.py    mode agent : session Claude Code avec outils, tests, relecture du diff
+  orchestrator.py  mode équipe : enchaînement des rôles et boucle critique → correction
   workspace.py     écriture des fichiers produits, exécution des tests
   repo.py          mode dépôt : clone, diff, branche, pull request
   web.py, static/  interface web
@@ -160,7 +204,9 @@ tests/             python -m unittest discover -s tests -t .
 
 - Les tests générés sont exécutés sur la machine qui fait tourner Super Agent
   (dans le conteneur avec Docker) : c'est du code écrit par une IA.
-- Les agents travaillent en séquence, un fichier complet à la fois : adapté à
-  de petits projets, pas encore à une grosse base de code existante.
-- Pas encore d'outils pour les agents (lecture d'un dépôt, recherche web) ni de
-  parallélisme, et une seule tâche s'exécute à la fois (les autres attendent).
+- En mode agent, la session lit et modifie les fichiers mais ne lance aucune
+  commande : c'est Super Agent qui exécute les tests, dans un environnement
+  sans jetons ni clés, puis lui renvoie les échecs.
+- En mode équipe, les agents réécrivent des fichiers complets : adapté à de
+  petits changements.
+- Une seule tâche s'exécute à la fois (les autres attendent).

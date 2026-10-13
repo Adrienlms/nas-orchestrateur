@@ -6,9 +6,15 @@
 # documentation de chaque fournisseur, ils changent souvent.
 
 [settings]
+mode = "agent"                    # "agent" : une session Claude Code avec outils, économe (défaut)
+                                  # "team" : architecte, développeur, testeur, relecteur (multi-IA)
+agent_model = "sonnet"            # modèle de la session agent ("opus" consomme bien plus de quota)
+agent_max_turns = 40              # échanges maximum de la session agent par tour
+agent_review = true               # relecture du diff par une autre IA (gratuite si possible)
+max_calls_per_task = 12           # garde-fou : la tâche s'arrête au-delà
 strategy = "best"                 # "best" : le meilleur modèle ; "economy" : le moins cher assez bon
 min_score = 7                     # seuil "assez bon" pour la stratégie economy
-max_review_rounds = 3             # tours de critique → correction
+max_review_rounds = 2             # tours de critique → correction
 max_tokens = 8000
 quota_cooldown_minutes = 60       # pause d'un fournisseur au quota épuisé (mémorisée entre lancements)
 rate_limit_cooldown_seconds = 60
@@ -71,13 +77,8 @@ priority = 9
 # tâche (architecture, code, test, review). Ces notes sont des estimations de
 # départ : ajuste-les selon ton expérience, c'est ce qui pilote le routage.
 
-# Abonnement : "opus", "sonnet", "haiku" sont les alias de Claude Code.
-[[models]]
-provider = "claude_abonnement"
-name = "opus"
-cost = 0
-scores = { architecture = 10, code = 10, test = 9, review = 10 }
-
+# Abonnement : "opus", "sonnet", "haiku" sont les alias de Claude Code. Opus
+# n'est pas listé par défaut : il épuise le quota Pro plusieurs fois plus vite.
 [[models]]
 provider = "claude_abonnement"
 name = "sonnet"
@@ -116,16 +117,19 @@ scores = { architecture = 7.5, code = 8, test = 8, review = 7.5 }
 
 [[models]]
 provider = "google"
-name = "gemini-2.5-pro"
+name = "gemini-3.1-pro-preview"   # payant : pas d'offre gratuite pour ce modèle
 cost = 3
 scores = { architecture = 9, code = 9, test = 8.5, review = 9 }
 
 [[models]]
 provider = "google"
-name = "gemini-2.5-flash"
+name = "gemini-3.8-flash"         # gratuit (clé AI Studio, sans carte), données utilisées par Google
 cost = 0
 scores = { architecture = 7.5, code = 8, test = 8, review = 7.5 }
 
+# Mistral : gratuit avec l'offre « Experiment » (numéro de téléphone vérifié, sans
+# carte ; les requêtes peuvent servir à entraîner leurs modèles). Les coûts
+# ci-dessous sont ceux de l'offre payante.
 [[models]]
 provider = "mistral"
 name = "mistral-large-latest"
@@ -140,15 +144,18 @@ scores = { architecture = 6, code = 8.5, test = 8, review = 6.5 }
 
 [[models]]
 provider = "groq"
-name = "llama-3.3-70b-versatile"
+name = "openai/gpt-oss-120b"      # plan gratuit : environ 1 000 requêtes par jour
 cost = 0
-scores = { architecture = 6.5, code = 7, test = 7, review = 6.5 }
+scores = { architecture = 7, code = 7.5, test = 7.5, review = 7 }
 
-[[models]]
-provider = "openrouter"
-name = "meta-llama/llama-3.3-70b-instruct:free"
-cost = 0
-scores = { architecture = 6.5, code = 7, test = 7, review = 6.5 }
+# OpenRouter : les modèles « :free » changent sans arrêt et sont limités à
+# 50 requêtes par jour sans achat de crédit. Choisis-en un sur
+# https://openrouter.ai/models?max_price=0 puis ajoute-le ici, par exemple :
+# [[models]]
+# provider = "openrouter"
+# name = "<identifiant>:free"
+# cost = 0
+# scores = { architecture = 6.5, code = 7, test = 7, review = 6.5 }
 
 [[models]]
 provider = "ollama"

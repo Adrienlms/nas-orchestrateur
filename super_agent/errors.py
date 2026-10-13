@@ -40,6 +40,10 @@ class NoModelAvailable(Exception):
     """Aucun modèle utilisable pour cette tâche (tous épuisés ou en pause)."""
 
 
+class BudgetExceeded(Exception):
+    """La tâche a atteint son nombre maximal d'appels : on s'arrête pour épargner le quota."""
+
+
 _QUOTA_HINTS = (
     "credit balance",        # Anthropic : "Your credit balance is too low"
     "insufficient_quota",    # OpenAI

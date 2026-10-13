@@ -124,19 +124,20 @@ a.pr { color: var(--accent); font-weight: 600; }
         <textarea id="request" rows="5" placeholder="Ex. : un outil en ligne de commande qui convertit un CSV en JSON" required></textarea>
         <div class="row">
           <div>
-            <label for="strategy">Choix des modèles</label>
+            <label for="strategy">Méthode</label>
             <select id="strategy">
-              <option value="best">Les meilleurs</option>
-              <option value="economy">Économique</option>
+              <option value="agent">Agent Claude (économe)</option>
+              <option value="best">Équipe, meilleurs modèles</option>
+              <option value="economy">Équipe, économique</option>
             </select>
           </div>
           <div>
             <label for="rounds">Tours de relecture</label>
-            <input type="number" id="rounds" min="1" max="10" value="3">
+            <input type="number" id="rounds" min="1" max="10" value="2">
           </div>
         </div>
         <label class="check"><input type="checkbox" id="run-tests" checked> Exécuter les tests générés</label>
-        <button class="primary" type="submit">Lancer l'équipe</button>
+        <button class="primary" type="submit">Lancer</button>
         <div class="err" id="form-err"></div>
       </form>
       <div class="panel">
@@ -171,7 +172,7 @@ a.pr { color: var(--accent); font-weight: 600; }
     <div class="panel">
       <div class="head">
         <h2>config.toml</h2>
-        <div class="actions"><button class="secondary" id="save-config">Enregistrer</button></div>
+        <div class="actions"><button class="secondary" id="default-config" title="Remplit l'éditeur avec la configuration fournie par la dernière version ; rien n'est enregistré avant de cliquer sur Enregistrer">Config par défaut</button><button class="secondary" id="save-config">Enregistrer</button></div>
       </div>
       <p class="muted">Fournisseurs, modèles et notes de compétence. Les clés d'API ne vont pas ici : elles se définissent dans les variables d'environnement du conteneur.</p>
       <textarea id="config" rows="28" spellcheck="false" style="font: 13px/1.5 ui-monospace, Menlo, monospace"></textarea>
@@ -269,7 +270,7 @@ async function loadDetail() {
   $("#detail").innerHTML = `
     <div class="head">
       <div><h2>${esc(job.request)}</h2><div class="muted" style="font-size:13px">${ago(job.created)}
-        · ${job.options.repo_url ? esc(job.options.repo_url.replace("https://github.com/", "")) + " · " : ""}${job.options.strategy === "economy" ? "économique" : "meilleurs modèles"} · ${job.options.rounds} tours max</div></div>
+        · ${job.options.repo_url ? esc(job.options.repo_url.replace("https://github.com/", "")) + " · " : ""}${job.options.mode === "team" ? (job.options.strategy === "economy" ? "équipe économique" : "équipe, meilleurs modèles") : "agent"} · ${job.options.rounds} tours max${usageText(job.usage)}</div></div>
       <div class="actions">${badge(job)}</div>
     </div>
     ${job.error ? `<div class="err">${esc(job.error)}</div>` : ""}
@@ -297,6 +298,12 @@ async function loadDetail() {
   if (live) timer = setTimeout(() => { loadDetail(); loadJobs(); }, 2000);
 }
 
+function usageText(u) {
+  if (!u || !u.calls) return "";
+  const cost = u.cost ? ` · équivalent API ${u.cost.toFixed(2)} $` : "";
+  return ` · ${u.calls} appels, ${Math.round(u.in / 1000)}k jetons lus${cost}`;
+}
+
 let mode = "new";
 try { mode = localStorage.getItem("sa-mode") || "new"; } catch {}
 function setMode(m) {
@@ -318,7 +325,8 @@ $("#new-job").onsubmit = async (e) => {
   const btn = e.submitter; btn.disabled = true;
   try {
     const job = await api("/api/jobs", { method: "POST", body: JSON.stringify({
-      request: $("#request").value, strategy: $("#strategy").value,
+      request: $("#request").value,
+      ...($("#strategy").value === "agent" ? { mode: "agent" } : { mode: "team", strategy: $("#strategy").value }),
       rounds: +$("#rounds").value, run_tests: $("#run-tests").checked,
       ...(mode === "repo" ? { repo_url: $("#repo-url").value, base_branch: $("#base-branch").value,
                               test_command: $("#test-cmd").value } : {}) }) });
@@ -353,7 +361,12 @@ async function loadStatus() {
 $("#reset").onclick = async () => { await api("/api/reset", { method: "POST" }); loadStatus(); };
 
 // ---- configuration -----------------------------------------------------
-async function loadConfig() { $("#config").value = (await api("/api/config")).toml; }
+let defaultConfig = "";
+async function loadConfig() { const c = await api("/api/config"); $("#config").value = c.toml; defaultConfig = c.default; }
+$("#default-config").onclick = () => {
+  $("#config").value = defaultConfig;
+  $("#config-ok").textContent = "Configuration par défaut chargée : clique sur Enregistrer pour l'appliquer.";
+};
 $("#save-config").onclick = async () => {
   $("#config-err").textContent = ""; $("#config-ok").textContent = "";
   try {

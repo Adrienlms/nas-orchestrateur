@@ -19,9 +19,11 @@ Mets au moins une des valeurs suivantes, selon ce que tu as :
 - **Abonnement Claude Pro ou Max** : sur n'importe quel ordinateur où Claude
   Code est installé, lance `claude setup-token`, connecte-toi, et copie le
   jeton affiché. C'est la valeur de `CLAUDE_CODE_OAUTH_TOKEN`.
-- **Gratuits** : une clé Google AI Studio (`GEMINI_API_KEY`), Mistral
-  (`MISTRAL_API_KEY`), Groq (`GROQ_API_KEY`) ou OpenRouter
-  (`OPENROUTER_API_KEY`).
+- **Gratuits, en relais et pour la relecture** : une clé Google AI Studio
+  (`GEMINI_API_KEY`, sans carte bancaire), Groq (`GROQ_API_KEY`), Mistral
+  (`MISTRAL_API_KEY`, offre « Experiment » avec un numéro de téléphone) ou
+  OpenRouter (`OPENROUTER_API_KEY`). Le détail de ce qui est vraiment gratuit
+  est dans le README, section « Les offres gratuites ».
 - **Payants**, seulement si tu le veux : `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`.
 
 - **Mode « dépôt GitHub »**, pour que l'équipe modifie un dépôt existant (y
@@ -55,6 +57,11 @@ expiré.
 reconstruit l'image `ghcr.io/adrienlms/nas-orchestrateur:latest`. Dans
 TrueNAS, ouvre l'application puis **Update** (ou arrête-la et redémarre-la)
 pour récupérer la nouvelle version.
+
+Ton `config.toml` est dans le dossier de données et n'est jamais écrasé par une
+mise à jour. Pour profiter des nouveaux réglages par défaut, ouvre l'onglet
+**Configuration**, clique sur **Config par défaut**, reporte tes changements
+éventuels, puis clique sur **Enregistrer**.
 
 ## Si l'image ne se télécharge pas
 

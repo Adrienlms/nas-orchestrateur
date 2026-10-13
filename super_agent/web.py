@@ -28,7 +28,8 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from .config import DEFAULT_CONFIG, build_router, load_config
-from .orchestrator import Orchestrator
+from .agent_mode import make_runner
+from .orchestrator import usage_summary
 from .repo import GitRepo, parse_github_url
 from .router import status_report
 from .workspace import Workspace
@@ -122,24 +123,27 @@ class JobStore:
     def _run(self, job_id: str):
         job = self.update(job_id, status="running", started=time.time())
         log = lambda line: self.log(job_id, line)
+        router = None
         try:
             config = load_config(self.config_path)
             opts = job["options"]
             if opts.get("strategy"):
                 config.setdefault("settings", {})["strategy"] = opts["strategy"]
             router = build_router(config, log, state_dir=self.data)
-            rounds = int(opts.get("rounds") or config.get("settings", {}).get("max_review_rounds", 3))
+            rounds = int(opts.get("rounds") or config.get("settings", {}).get("max_review_rounds", 2))
             if opts.get("repo_url"):
                 self._run_repo(job, router, rounds, log)
             else:
-                orch = Orchestrator(router, Workspace(self.dir(job_id) / "workspace"), rounds,
-                                    run_tests=opts.get("run_tests", True), log=log)
-                report = orch.run(job["request"])
+                runner = make_runner(router, Workspace(self.dir(job_id) / "workspace"), rounds,
+                                     run_tests=opts.get("run_tests", True), log=log,
+                                     mode=opts.get("mode"))
+                report = runner.run(job["request"])
                 self.update(job_id, status="done", approved=report.approved, steps=report.steps,
-                            finished=time.time())
+                            usage=usage_summary(router.usage), finished=time.time())
         except Exception as e:                          # noqa: BLE001 — on garde la trace pour l'utilisateur
             log("ERREUR : " + "".join(traceback.format_exception_only(e)).strip())
-            self.update(job_id, status="failed", error=str(e), finished=time.time())
+            self.update(job_id, status="failed", error=str(e), finished=time.time(),
+                        usage=usage_summary(router.usage) if router else None)
 
     def _run_repo(self, job: dict, router, rounds: int, log):
         """Mode dépôt : clone, modifications par l'équipe, puis branche + pull request."""
@@ -147,11 +151,13 @@ class JobStore:
         repo = GitRepo(opts["repo_url"], job_dir / "repo", log=log, api_base=self.github_api)
         repo.clone(opts.get("base_branch") or "main")
         ws = Workspace(repo.path, test_command=opts.get("test_command") or None)
-        orch = Orchestrator(router, ws, rounds, run_tests=opts.get("run_tests", True), log=log,
-                            repo_context=repo.context(), diff=repo.diff, artifacts_dir=job_dir)
-        report = orch.run(job["request"])
+        runner = make_runner(router, ws, rounds, run_tests=opts.get("run_tests", True), log=log,
+                             mode=opts.get("mode"), repo_context=repo.context, diff=repo.diff,
+                             artifacts_dir=job_dir)
+        report = runner.run(job["request"])
         changed = sorted(report.files) + [f"{p} (supprimé)" for p in report.deleted]
-        self.update(job["id"], steps=report.steps, approved=report.approved, changed=changed)
+        self.update(job["id"], steps=report.steps, approved=report.approved, changed=changed,
+                    usage=usage_summary(router.usage))
 
         branch = f"super-agent/{job['id']}"
         title = job["request"].strip().splitlines()[0][:72]
@@ -258,7 +264,8 @@ def make_handler(store: JobStore, password: str):
             if not request:
                 raise ValueError("la demande est vide")
             options = {"strategy": body.get("strategy") if body.get("strategy") in ("best", "economy") else None,
-                       "rounds": max(1, min(10, int(body.get("rounds") or 3))),
+                       "rounds": max(1, min(10, int(body.get("rounds") or 2))),
+                       "mode": body.get("mode") if body.get("mode") in ("agent", "team") else None,
                        "run_tests": bool(body.get("run_tests", True))}
             repo_url = str(body.get("repo_url") or "").strip()
             if repo_url:
@@ -310,7 +317,7 @@ def make_handler(store: JobStore, password: str):
             self._json({"ok": True})
 
         def get_config(self, query):
-            self._json({"toml": store.config_path.read_text()})
+            self._json({"toml": store.config_path.read_text(), "default": DEFAULT_CONFIG.read_text()})
 
         def put_config(self, query):
             text = str(self._body().get("toml", ""))
