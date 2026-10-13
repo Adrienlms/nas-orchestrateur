@@ -45,6 +45,7 @@ class Report:
     rounds: list[RoundResult] = field(default_factory=list)
     steps: list[str] = field(default_factory=list)
     approved: bool = False
+    summary: str = ""
 
 
 def parse_review(text: str) -> dict:
@@ -88,10 +89,13 @@ class Orchestrator:
             return f"Diff par rapport au dépôt :\n{self.diff()[:60_000]}"
         return f"Fichiers :\n{render_files(report.files)}"
 
-    def _ask(self, agent: Agent, prompt: str, report: Report, avoid: str | None = None):
+    def _ask(self, agent: Agent, prompt: str, report: Report, avoid: str | None = None,
+             with_repo: bool = False):
+        """`with_repo` joint le contenu du dépôt : coûteux, réservé à ceux qui en ont besoin."""
         self.log(f"▶ {agent.role} ({agent.kind})")
+        content = self._with_repo(prompt) if with_repo else prompt
         result = self.router.complete(agent.kind, agent.system,
-                                      [{"role": "user", "content": self._with_repo(prompt)}],
+                                      [{"role": "user", "content": content}],
                                       avoid_provider=avoid)
         step = f"{agent.role} → {result.provider}/{result.model}"
         report.steps.append(step)
@@ -112,10 +116,10 @@ class Orchestrator:
     def run(self, request: str) -> Report:
         report = Report(request)
 
-        report.spec = self._ask(ARCHITECT, f"Demande :\n{request}", report).text
+        report.spec = self._ask(ARCHITECT, f"Demande :\n{request}", report, with_repo=True).text
         (self.artifacts / "SPEC.md").write_text(report.spec)
 
-        dev = self._ask(DEVELOPER, f"Spécification :\n{report.spec}", report)
+        dev = self._ask(DEVELOPER, f"Spécification :\n{report.spec}", report, with_repo=True)
         dev_provider = dev.provider
         self._apply(dev.text, report, "developer")
 
@@ -152,7 +156,8 @@ class Orchestrator:
                        f"{render_files(report.files)}\n\nRésultat des tests :\n{test_output}\n\n")
 
             if code_fb:
-                fix = self._ask(DEVELOPER, context + f"Remarques à corriger :\n{code_fb}", report)
+                fix = self._ask(DEVELOPER, context + f"Remarques à corriger :\n{code_fb}", report,
+                                with_repo=True)
                 self._apply(fix.text, report, "developer")
             if tests_fb:
                 fix = self._ask(TESTER, context + f"Remarques sur les tests :\n{tests_fb}", report)
@@ -167,6 +172,8 @@ def format_report(report: Report, usage: list[dict]) -> str:
              f"**Résultat :** {'approuvé' if report.approved else 'non approuvé'} "
              f"après {len(report.rounds)} tour(s) de relecture\n", "## Qui a fait quoi\n"]
     lines += [f"- {s}" for s in report.steps]
+    if report.summary:
+        lines += ["\n## Résumé de l'agent\n", report.summary.strip()]
     lines.append("\n## Tours de relecture\n")
     for r in report.rounds:
         state = {True: "OK", False: "échec", None: "non exécutés"}[r.tests_ok]
@@ -175,11 +182,25 @@ def format_report(report: Report, usage: list[dict]) -> str:
         lines += [f"- [{i.get('target')}/{i.get('severity')}] {i.get('description')}"
                   for i in r.review["issues"]]
         lines.append("")
-    total_in = sum(u["in"] for u in usage)
-    total_out = sum(u["out"] for u in usage)
-    lines.append(f"## Consommation\n\n{len(usage)} appels, {total_in} jetons en entrée, "
-                 f"{total_out} en sortie.\n")
+    lines.append(f"## Consommation\n\n{usage_line(usage)}\n")
     lines.append("## Fichiers\n")
     lines += [f"- {p}" for p in sorted(report.files)]
     lines += [f"- {p} (supprimé)" for p in sorted(report.deleted)]
     return "\n".join(lines) + "\n"
+
+
+def usage_summary(usage: list[dict]) -> dict:
+    return {"calls": len(usage), "turns": sum(u.get("turns", 1) for u in usage),
+            "in": sum(u["in"] for u in usage), "out": sum(u["out"] for u in usage),
+            "cost": round(sum(u.get("cost", 0) for u in usage), 4)}
+
+
+def usage_line(usage: list[dict]) -> str:
+    """Résumé lisible ; le coût équivalent API donne l'ordre de grandeur du quota consommé."""
+    u = usage_summary(usage)
+    line = (f"{u['calls']} appels ({u['turns']} échanges avec le modèle), {u['in']} jetons lus "
+            f"(contexte et cache compris), {u['out']} écrits.")
+    if u["cost"]:
+        line += (f" Équivalent API : {u['cost']:.2f} $ (non facturé avec l'abonnement, mais "
+                 "c'est ce qui pèse sur ton quota).")
+    return line

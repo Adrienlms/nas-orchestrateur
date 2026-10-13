@@ -1,3 +1,4 @@
+import json
 import os
 import stat
 import tempfile
@@ -113,7 +114,16 @@ if os.environ.get("ANTHROPIC_API_KEY"):
     print(json.dumps({"is_error": True, "result": "paid key leaked"})); sys.exit(1)
 if os.environ.get("FAKE_MODE") == "limit":
     print(json.dumps({"is_error": True, "result": "Claude AI usage limit reached|4102444800"})); sys.exit(1)
-print(json.dumps({"is_error": False, "result": "bonjour", "usage": {"input_tokens": 1}}))
+if os.environ.get("FAKE_RECORD"):
+    with open(os.environ["FAKE_RECORD"], "w") as f:
+        json.dump({"argv": sys.argv[1:], "env": sorted(os.environ), "cwd": os.getcwd()}, f)
+if os.environ.get("FAKE_MODE") == "max_turns":
+    print(json.dumps({"is_error": True, "subtype": "error_max_turns", "num_turns": 40,
+                      "session_id": "s1"})); sys.exit(1)
+print(json.dumps({"is_error": False, "result": "bonjour", "num_turns": 3, "session_id": "s1",
+                  "total_cost_usd": 0.42,
+                  "usage": {"input_tokens": 1, "cache_read_input_tokens": 9000,
+                            "cache_creation_input_tokens": 999, "output_tokens": 50}}))
 """
 
 
@@ -138,6 +148,35 @@ class TestClaudeCode(unittest.TestCase):
             with self.assertRaises(QuotaExhausted) as ctx:
                 self.provider.chat("opus", "s", [{"role": "user", "content": "x"}], 10)
         self.assertGreater(ctx.exception.retry_after, 0)
+
+    def test_usage_counts_cached_context(self):
+        result = self.provider.chat("sonnet", "s", [{"role": "user", "content": "x"}], 10)
+        self.assertEqual((result.input_tokens, result.output_tokens, result.cost_usd),
+                         (10_000, 50, 0.42))
+
+    def test_agent_session_has_tools_but_no_secrets(self):
+        record = Path(self.dir.name) / "record.json"
+        work = Path(self.dir.name) / "travail"
+        work.mkdir()
+        env = {"FAKE_RECORD": str(record), "GITHUB_TOKEN": "ghp", "GEMINI_API_KEY": "g",
+               "CLAUDE_CODE_OAUTH_TOKEN": "abo"}
+        with mock.patch.dict(os.environ, env):
+            result = self.provider.agent("sonnet", "consignes", "demande", str(work), resume="s0")
+        seen = json.loads(record.read_text())
+        self.assertEqual(result.session_id, "s1")
+        self.assertEqual(Path(seen["cwd"]).resolve(), work.resolve())
+        self.assertIn("CLAUDE_CODE_OAUTH_TOKEN", seen["env"])
+        for secret in ("GITHUB_TOKEN", "GEMINI_API_KEY", "ANTHROPIC_API_KEY"):
+            self.assertNotIn(secret, seen["env"])
+        argv = " ".join(seen["argv"])
+        self.assertIn("--resume s0", argv)
+        self.assertIn("--permission-mode acceptEdits", argv)
+        self.assertNotIn("Bash", argv)                 # pas de shell : les tests sont lancés par Super Agent
+
+    def test_agent_turn_limit_keeps_the_work(self):
+        with mock.patch.dict(os.environ, {"FAKE_MODE": "max_turns"}):
+            result = self.provider.agent("sonnet", "s", "x", self.dir.name)
+        self.assertEqual(result.turns, 40)
 
 
 class TestWorkspace(unittest.TestCase):

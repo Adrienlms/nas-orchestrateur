@@ -154,12 +154,15 @@ class TestHelpers(unittest.TestCase):
 
     def test_generated_tests_do_not_see_secrets(self):
         with mock.patch.dict(os.environ, {"GITHUB_TOKEN": "x", "GEMINI_API_KEY": "y",
-                                          "CLAUDE_CODE_OAUTH_TOKEN": "z", "PATH": "/bin"}):
+                                          "CLAUDE_CODE_OAUTH_TOKEN": "z", "PATH": "/bin",
+                                          "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "a.b",
+                                          "GIT_CONFIG_VALUE_0": "c"}):
             env = safe_env()
         self.assertNotIn("GITHUB_TOKEN", env)
         self.assertNotIn("GEMINI_API_KEY", env)
         self.assertNotIn("CLAUDE_CODE_OAUTH_TOKEN", env)
         self.assertEqual(env["PATH"], "/bin")
+        self.assertFalse(any(k.startswith("GIT_CONFIG_") for k in env))   # git reste utilisable
 
 
 if __name__ == "__main__":

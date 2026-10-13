@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from .errors import (AuthError, FatalRequestError, NoModelAvailable, ProviderError,
+from .errors import (AuthError, BudgetExceeded, FatalRequestError, NoModelAvailable, ProviderError,
                      QuotaExhausted, RateLimited, TransientError)
 from .providers import ChatResult, Provider
 
@@ -118,6 +118,7 @@ class Router:
                 continue
             provider = self.providers[model.provider]
             try:
+                self._check_budget()
                 result = provider.chat(model.name, system, messages, max_tokens)
             except QuotaExhausted as e:
                 secs = e.retry_after or self.settings.get("quota_cooldown_minutes", 60) * 60
@@ -139,11 +140,48 @@ class Router:
             except ProviderError as e:
                 self._fallback_note(model, e, attempts)
             else:
-                self.usage.append({"kind": kind, "provider": result.provider, "model": result.model,
-                                   "in": result.input_tokens, "out": result.output_tokens})
+                self._record(kind, result)
                 return result
         detail = "; ".join(attempts) or "aucun fournisseur configuré avec une clé"
         raise NoModelAvailable(f"aucun modèle disponible pour « {kind} » ({detail})")
+
+    # ---- session agent (Claude Code avec outils) ------------------------
+    def agent_provider(self) -> Provider | None:
+        """Le premier fournisseur prêt capable de travailler en session avec outils."""
+        ready = [p for name, p in self.providers.items()
+                 if p.supports_agent and p.available() and not self.state.paused(name)]
+        return min(ready, key=lambda p: p.cfg.get("priority", 50), default=None)
+
+    def run_agent(self, model: str, system: str, prompt: str, cwd: str,
+                  max_turns: int, resume: str | None = None) -> ChatResult:
+        provider = self.agent_provider()
+        if provider is None:
+            raise NoModelAvailable("aucun abonnement Claude Code prêt pour le mode agent")
+        self._check_budget()
+        try:
+            result = provider.agent(model, system, prompt, cwd, max_turns=max_turns,
+                                    resume=resume)
+        except QuotaExhausted as e:
+            secs = e.retry_after or self.settings.get("quota_cooldown_minutes", 60) * 60
+            self.state.pause(provider.name, secs, "quota épuisé")
+            raise NoModelAvailable(str(e)) from None
+        except AuthError as e:
+            self.state.pause(provider.name, 10 ** 9, "clé refusée", persist=False)
+            raise NoModelAvailable(str(e)) from None
+        self._record("agent", result)
+        return result
+
+    # ---- consommation ---------------------------------------------------
+    def _check_budget(self):
+        limit = self.settings.get("max_calls_per_task", 12)
+        if limit and len(self.usage) >= limit:
+            raise BudgetExceeded(f"budget atteint : {limit} appels pour cette tâche "
+                                 "(réglage max_calls_per_task)")
+
+    def _record(self, kind: str, result: ChatResult):
+        self.usage.append({"kind": kind, "provider": result.provider, "model": result.model,
+                           "in": result.input_tokens, "out": result.output_tokens,
+                           "cost": result.cost_usd, "turns": result.turns})
 
     def _fallback_note(self, model: ModelSpec, err: Exception, attempts: list[str]):
         attempts.append(f"{model.provider}/{model.name}: {err}")

@@ -28,11 +28,16 @@ class ChatResult:
     text: str
     provider: str
     model: str
-    input_tokens: int = 0
+    input_tokens: int = 0              # y compris le contexte relu depuis le cache
     output_tokens: int = 0
+    cost_usd: float = 0.0              # coût équivalent API indiqué par Claude Code
+    turns: int = 1
+    session_id: str | None = None
 
 
 class Provider:
+    supports_agent = False             # sait travailler en session avec outils (mode agent)
+
     def __init__(self, name: str, cfg: dict):
         self.name = name
         self.cfg = cfg
@@ -108,9 +113,15 @@ class ClaudeCodeProvider(Provider):
     Les appels consomment alors le quota de l'abonnement Pro ou Max (la fenêtre
     qui se recharge toutes les 5 heures) au lieu des crédits payants de l'API.
     Prérequis : Claude Code installé et connecté une fois avec `claude` puis /login.
+
+    Deux usages : `chat` (une question, une réponse, sans outils) et `agent`
+    (une session de travail avec outils dans un dossier, voir agent_mode.py).
     """
 
     _LIMIT = re.compile(r"(usage limit|limit reached|hit your limit|rate limit)", re.I)
+    supports_agent = True
+    _SECRET = re.compile(r"(KEY|TOKEN|SECRET|PASSWORD)", re.I)
+    AGENT_TOOLS = ("Read", "Edit", "Write", "Glob", "Grep")
 
     def __init__(self, name, cfg):
         super().__init__(name, cfg)
@@ -119,30 +130,63 @@ class ClaudeCodeProvider(Provider):
     def available(self) -> bool:
         return self.cfg.get("enabled", True) and shutil.which(self.command) is not None
 
+    def _env(self) -> dict:
+        # Sans ANTHROPIC_API_KEY, Claude Code utilise l'abonnement et non les crédits payants.
+        # Les autres secrets (GITHUB_TOKEN, clés des autres fournisseurs) ne lui servent à rien.
+        own = lambda k: k.startswith(("CLAUDE", "ANTHROPIC_")) and k != "ANTHROPIC_API_KEY"
+        return {k: v for k, v in os.environ.items()
+                if (own(k) or not self._SECRET.search(k)) and k != "ANTHROPIC_API_KEY"
+                and not (k.startswith("CLAUDE_CODE_") and not v)}
+
+    def _call(self, cmd: list[str], prompt: str, cwd: str, timeout: int) -> dict:
+        try:
+            proc = subprocess.run(cmd, input=prompt, capture_output=True, text=True,
+                                  env=self._env(), cwd=cwd, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            raise TransientError(self.name, f"pas de réponse après {timeout} s") from None
+        try:
+            data = json.loads(proc.stdout)
+        except json.JSONDecodeError:
+            data = {"is_error": True, "result": (proc.stdout + proc.stderr).strip()}
+        # Atteindre la limite de tours n'est pas une panne : le travail fait reste sur disque.
+        if data.get("subtype") == "error_max_turns":
+            return data
+        if data.get("is_error") or proc.returncode != 0:
+            raise self._error(str(data.get("result", "")) or proc.stderr)
+        return data
+
+    def _result(self, data: dict, model: str) -> ChatResult:
+        usage = data.get("usage") or {}
+        tokens_in = sum(usage.get(k) or 0 for k in
+                        ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"))
+        return ChatResult(str(data.get("result", "")), self.name, model, tokens_in,
+                          usage.get("output_tokens") or 0, data.get("total_cost_usd") or 0.0,
+                          data.get("num_turns") or 1, data.get("session_id"))
+
     def chat(self, model, system, messages, max_tokens):
         prompt = "\n\n".join(m["content"] for m in messages)
         cmd = [self.command, "-p", "--output-format", "json", "--model", model,
                "--system-prompt", system, "--tools", "", "--no-session-persistence",
                *self.cfg.get("extra_args", [])]
-        # Sans cette ligne, Claude Code utiliserait la clé d'API (payante) si elle est définie.
-        env = {k: v for k, v in os.environ.items()
-               if k != "ANTHROPIC_API_KEY" and not (k.startswith("CLAUDE_CODE_") and not v)}
         with tempfile.TemporaryDirectory() as cwd:   # dossier vide : rien à lire ni modifier
-            try:
-                proc = subprocess.run(cmd, input=prompt, capture_output=True, text=True,
-                                      env=env, cwd=cwd, timeout=self.timeout)
-            except subprocess.TimeoutExpired:
-                raise TransientError(self.name, f"pas de réponse après {self.timeout} s") from None
-        try:
-            data = json.loads(proc.stdout)
-        except json.JSONDecodeError:
-            data = {"is_error": True, "result": (proc.stdout + proc.stderr).strip()}
-        text = str(data.get("result", ""))
-        if data.get("is_error") or proc.returncode != 0:
-            raise self._error(text or proc.stderr)
-        usage = data.get("usage") or {}
-        return ChatResult(text, self.name, model,
-                          usage.get("input_tokens", 0), usage.get("output_tokens", 0))
+            return self._result(self._call(cmd, prompt, cwd, self.timeout), model)
+
+    def agent(self, model: str, system: str, prompt: str, cwd: str, max_turns: int = 40,
+              resume: str | None = None, timeout: int = 1800) -> ChatResult:
+        """Session de travail : l'agent lit et modifie lui-même les fichiers de `cwd`.
+
+        Il ne lit que ce dont il a besoin au lieu de recevoir tout le dépôt, et ne
+        réécrit que les lignes à changer. Pas de commande shell : les tests sont
+        lancés par Super Agent, dans un environnement sans secrets.
+        """
+        tools = ",".join(self.AGENT_TOOLS)
+        cmd = [self.command, "-p", "--output-format", "json", "--model", model,
+               "--append-system-prompt", system, "--tools", tools,
+               "--allowedTools", *self.AGENT_TOOLS, "--permission-mode", "acceptEdits",
+               "--max-turns", str(max_turns), *self.cfg.get("extra_args", [])]
+        if resume:
+            cmd += ["--resume", resume]
+        return self._result(self._call(cmd, prompt, cwd, timeout), model)
 
     def _error(self, text: str) -> ProviderError:
         if self._LIMIT.search(text):
@@ -166,10 +210,12 @@ class MockProvider(Provider):
     def __init__(self, name, cfg):
         super().__init__(name, cfg)
         self.calls = 0
+        self.prompts: list[str] = []
         self._failures_left = cfg.get("fail_times", 0)
         self._round = {"developer": 0, "reviewer": 0}
+        self.supports_agent = cfg.get("agent", False)
 
-    def chat(self, model, system, messages, max_tokens):
+    def _maybe_fail(self):
         self.calls += 1
         if self._failures_left:
             self._failures_left -= 1
@@ -177,6 +223,20 @@ class MockProvider(Provider):
             error = {"quota": QuotaExhausted, "rate": RateLimited,
                      "transient": TransientError, "auth": AuthError}.get(kind, ProviderError)
             raise error(self.name, f"panne simulée ({kind})")
+
+    def agent(self, model, system, prompt, cwd, max_turns=40, resume=None, timeout=1800):
+        """Imite une session Claude Code : écrit les fichiers comme le ferait l'agent."""
+        self._maybe_fail()
+        self.prompts.append(prompt)
+        from .workspace import Workspace, parse_files
+        ws = Workspace(cwd)
+        ws.write(parse_files(self._answer("developer") + self._answer("tester")))
+        return ChatResult("calc.py et test_calc.py mis à jour.", self.name, model, 1000, 100,
+                          0.01, 3, "session-mock")
+
+    def chat(self, model, system, messages, max_tokens):
+        self._maybe_fail()
+        self.prompts.append(messages[-1]["content"] if messages else "")
         role = re.search(r"\[role:(\w+)\]", system)
         role = role.group(1) if role else "general"
         return ChatResult(self._answer(role), self.name, model)

@@ -16,7 +16,7 @@ services:
       CLAUDE_CODE_OAUTH_TOKEN: ""
       # Mode « dépôt GitHub » : jeton à accès limité (voir docs/TRUENAS.md)
       GITHUB_TOKEN: ""
-      # Fournisseurs avec niveau gratuit
+      # Niveaux gratuits limités (détail dans le README) : relais et relecture
       GEMINI_API_KEY: ""
       MISTRAL_API_KEY: ""
       GROQ_API_KEY: ""
