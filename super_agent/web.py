@@ -35,6 +35,13 @@ from .workspace import Workspace
 STATIC = Path(__file__).resolve().parent / "static"
 
 
+def write_json(path: Path, data: dict):
+    """Écriture atomique : un lecteur ne voit jamais un fichier à moitié écrit."""
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2))
+    os.replace(tmp, path)
+
+
 class JobStore:
     """Historique des tâches, une par dossier : job.json, log.txt, workspace/."""
 
@@ -77,7 +84,7 @@ class JobStore:
         with self.lock:
             job = self.get(job_id)
             job.update(fields)
-            (self.dir(job_id) / "job.json").write_text(json.dumps(job, ensure_ascii=False, indent=2))
+            write_json(self.dir(job_id) / "job.json", job)
             return job
 
     def create(self, request: str, options: dict) -> dict:
@@ -87,7 +94,7 @@ class JobStore:
         job = {"id": job_id, "request": request, "options": options, "status": "queued",
                "created": time.time(), "started": None, "finished": None,
                "approved": None, "error": None, "steps": []}
-        (path / "job.json").write_text(json.dumps(job, ensure_ascii=False, indent=2))
+        write_json(path / "job.json", job)
         (path / "log.txt").write_text("")
         self.queue.put(job_id)
         return job
